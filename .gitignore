@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyTorch - 模型权重和训练产物
+*.pth
+*.pt
+*.ckpt
+weights/
+checkpoints/
+runs/
+run/
+exp/
+experiments/
+
+# 数据集 - 原始数据和转换后的数据
+raw_datasets/
+hf_datasets/
+VOCdevkit/
+VOCdevkit_no_ai/
+*.zip
+*.tar
+*.tar.gz
+
+# 训练输出
+*.log
+*.csv
+tensorboard/
+wandb/
+
+# 图像和结果 (可选，如果只想保留代码)
+# *.png
+# *.jpg
+# *.jpeg
+
+# 大型二进制文件
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# uv
+uv.lock

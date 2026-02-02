@@ -1,0 +1,23 @@
+[project]
+name = "unet-embroidery-seg"
+version = "0.1.0"
+description = "U-Net embroidery image segmentation with Hugging Face dataset"
+requires-python = ">=3.10"
+dependencies = [
+    "datasets>=3.0.0",
+    "Pillow>=10.0.0",
+    "huggingface-hub>=0.20.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "tqdm>=4.66.0",
+    "matplotlib>=3.7.0",
+    "opencv-python>=4.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.uv]
+python-preference = "only-managed"
