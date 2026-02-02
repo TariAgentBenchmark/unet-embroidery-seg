@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from model.unet_resnet import Unet
+from model.model_factory import build_model, SUPPORTED_MODELS
 from utils.utils import cvtColor, preprocess_input, resize_image
 from utils.create_exp_folder import create_val_exp_folder
 
@@ -29,9 +29,9 @@ def time_synchronized():
     # 返回当前时间戳（单位为秒）
     return time.time()
 
-def load_model(model_path, num_classes, device):
+def load_model(model_name, model_path, num_classes, device):
     # 创建模型并加载权重
-    net = Unet(num_classes=num_classes)
+    net = build_model(model_name, num_classes=num_classes)
     net.load_state_dict(torch.load(model_path, map_location=device))
     net.eval()  # 设置为评估模式
     net.to(device)  # 移动到指定设备
@@ -120,7 +120,7 @@ def predict(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # 加载模型
-    model = load_model(args.weights, num_classes, device)
+    model = load_model(args.model, args.weights, num_classes, device)
 
     # 处理输入路径
     if os.path.isdir(args.data_path):
@@ -157,6 +157,12 @@ def parse_args():
     parser.add_argument("--weights", default="run/train/exp10/weights/best_model_20.pth")
     # 添加类别数量参数，默认为 3
     parser.add_argument("--num-classes", default=20, type=int)
+    parser.add_argument(
+        "--model",
+        default="unet_resnet50",
+        choices=sorted(SUPPORTED_MODELS.keys()),
+        help="Model architecture",
+    )
 
     # 添加是否保存并排显示图像的参数，默认为 False
     parser.add_argument("--mix_type", default=True, action='store_true',

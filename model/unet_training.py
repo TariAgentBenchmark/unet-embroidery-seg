@@ -197,3 +197,84 @@ def set_optimizer_lr(optimizer, lr_scheduler_func, epoch):
     for param_group in optimizer.param_groups:
         # 将当前参数组的学习率（lr）更新为调度函数计算得到的学习率
         param_group['lr'] = lr
+
+
+# =========================================================
+# Binary segmentation losses
+# =========================================================
+def bce_with_logits_loss(logits, targets, pos_weight: torch.Tensor | None = None):
+    """
+    BCEWithLogitsLoss 的轻量封装。
+
+    Args:
+        logits: (N, H, W) 或 (P,) 的 logits
+        targets: 与 logits 同形状的 0/1 目标
+        pos_weight: 标量张量（用于类别不平衡），如 neg/pos
+    """
+    if pos_weight is not None:
+        pos_weight = pos_weight.to(logits.device, dtype=logits.dtype)
+    return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pos_weight)
+
+
+def _lovasz_grad(gt_sorted):
+    """
+    Computes gradient of the Lovasz extension w.r.t sorted errors.
+    See: https://arxiv.org/abs/1705.08790
+    """
+    gts = gt_sorted.sum()
+    intersection = gts - gt_sorted.cumsum(0)
+    union = gts + (1 - gt_sorted).cumsum(0)
+    jaccard = 1.0 - intersection / union
+    if jaccard.numel() > 1:
+        jaccard[1:] = jaccard[1:] - jaccard[:-1]
+    return jaccard
+
+
+def _lovasz_hinge_flat(logits, labels):
+    """
+    Binary Lovasz hinge loss for flat tensors.
+
+    Args:
+        logits: (P,) float tensor
+        labels: (P,) float tensor in {0,1}
+    """
+    if logits.numel() == 0:
+        return logits.sum() * 0.0
+
+    labels = labels.float()
+    signs = 2.0 * labels - 1.0
+    errors = 1.0 - logits * signs
+    errors_sorted, perm = torch.sort(errors, descending=True)
+    gt_sorted = labels[perm]
+    grad = _lovasz_grad(gt_sorted)
+    return torch.dot(F.relu(errors_sorted), grad)
+
+
+def lovasz_hinge_loss(logits, labels, ignore_index: int | None = None, per_image: bool = False):
+    """
+    Lovasz-hinge loss for binary segmentation.
+
+    Args:
+        logits: (N, H, W) 或 (H, W) 的 logits
+        labels: 同形状的 0/1 标签（int/float）
+        ignore_index: 可选忽略值
+        per_image: 是否按图像求平均
+    """
+    if logits.dim() == 2:
+        logits = logits.unsqueeze(0)
+        labels = labels.unsqueeze(0)
+
+    losses = []
+    for logit, lab in zip(logits, labels):
+        if ignore_index is not None:
+            valid = lab != ignore_index
+            logit = logit[valid]
+            lab = lab[valid]
+        else:
+            logit = logit.view(-1)
+            lab = lab.view(-1)
+        losses.append(_lovasz_hinge_flat(logit, lab))
+
+    if len(losses) == 0:
+        return logits.sum() * 0.0
+    return torch.stack(losses).mean() if per_image else torch.stack(losses).mean()

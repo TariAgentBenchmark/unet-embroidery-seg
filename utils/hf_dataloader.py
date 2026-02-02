@@ -3,6 +3,8 @@ Hugging Face 数据集加载器
 支持从本地 hf_datasets 加载数据
 """
 
+import os
+
 import torch
 import numpy as np
 from torch.utils.data import Dataset
@@ -15,7 +17,17 @@ from utils.utils import cvtColor, preprocess_input
 class HFUnetDataset(Dataset):
     """从 Hugging Face 格式数据集加载的 Unet Dataset"""
     
-    def __init__(self, data_dir, input_shape, num_classes, augmentation=True, split="train", config="full"):
+    def __init__(
+        self,
+        data_dir,
+        input_shape,
+        num_classes,
+        augmentation=True,
+        split="train",
+        config="full",
+        task: str = "multiclass",
+        cache_dir: str | None = None,
+    ):
         """
         Args:
             data_dir: hf_datasets 目录路径 (如 "./hf_datasets/merged_dataset_v2")
@@ -24,14 +36,19 @@ class HFUnetDataset(Dataset):
             augmentation: 是否数据增强
             split: 数据分割 ("train", "validation", "test")
             config: 数据集配置 ("full" 或 "no-ai")
+            task: 任务类型 ("binary" 或 "multiclass")
+            cache_dir: Hugging Face datasets 缓存目录（建议放在项目内，避免无权限写入 $HOME/.cache）
         """
         self.input_shape = input_shape
         self.num_classes = num_classes
         self.augmentation = augmentation
+        self.task = task
         
         # 加载 Hugging Face 数据集
         dataset_path = f"{data_dir}/{config}"
-        self.dataset = load_dataset(dataset_path, split=split)
+        cache_dir = cache_dir or os.environ.get("HF_DATASETS_CACHE") or ".hf-cache/datasets"
+        os.makedirs(cache_dir, exist_ok=True)
+        self.dataset = load_dataset(dataset_path, split=split, cache_dir=cache_dir)
         self.length = len(self.dataset)
         
     def __len__(self):
@@ -51,6 +68,10 @@ class HFUnetDataset(Dataset):
         # 图像预处理
         jpg = np.transpose(preprocess_input(np.array(jpg, np.float64)), [2, 0, 1])
         png = np.array(png)
+
+        # 二分类：将所有前景类别合并为 1（前景 vs 背景）
+        if self.task == "binary":
+            png = (png > 0).astype(np.uint8)
         
         # 将标签值大于类别数的部分设置为类别数（忽略这些区域）
         png[png >= self.num_classes] = self.num_classes

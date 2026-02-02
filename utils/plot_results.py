@@ -1,13 +1,31 @@
-import matplotlib.pyplot as plt
 import os
+
+# 避免在受限环境下写入 $HOME/.matplotlib 失败
+os.environ.setdefault("MPLCONFIGDIR", ".mpl-cache")
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+import matplotlib.pyplot as plt
 
 def plot_training_curves(train_losses, val_losses, val_metrics_history, weights_folder):
     # 准备数据
     epochs = range(1, len(train_losses) + 1)
-    pixel_acc_list = [m["Pixel Accuracy"] for m in val_metrics_history]
-    mean_acc_list = [m["Mean Accuracy"] for m in val_metrics_history]
-    mean_iou_list = [m["Mean IoU"] for m in val_metrics_history]
-    fw_iou_list = [m["Frequency Weighted IoU"] for m in val_metrics_history]
+
+    def _get_series(key):
+        return [float(m.get(key, 0.0)) for m in val_metrics_history]
+
+    # 兼容二分类/多分类两种指标集合
+    metric_keys_priority = [
+        "Dice",
+        "IoU",
+        "Precision",
+        "Recall",
+        "Accuracy",
+        "Pixel Accuracy",
+        "Mean Accuracy",
+        "Mean IoU",
+        "Frequency Weighted IoU",
+    ]
+    metric_keys = [k for k in metric_keys_priority if len(val_metrics_history) > 0 and k in val_metrics_history[0]]
 
     # ========================
     # 📈 绘制 Loss 曲线
@@ -30,10 +48,8 @@ def plot_training_curves(train_losses, val_losses, val_metrics_history, weights_
     # 📈 绘制指标曲线
     # =========================
     plt.figure(figsize=(8,6))
-    plt.plot(epochs, pixel_acc_list, label="Pixel Accuracy", linewidth=2)
-    plt.plot(epochs, mean_acc_list, label="Mean Accuracy", linewidth=2)
-    plt.plot(epochs, mean_iou_list, label="Mean IoU", linewidth=2)
-    plt.plot(epochs, fw_iou_list, label="FWIoU", linewidth=2)
+    for k in metric_keys:
+        plt.plot(epochs, _get_series(k), label=k, linewidth=2)
 
     plt.xlabel("Epoch", fontsize=14, fontname='Times New Roman')
     plt.ylabel("Score", fontsize=14, fontname='Times New Roman')

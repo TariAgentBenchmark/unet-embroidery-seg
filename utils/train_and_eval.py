@@ -2,7 +2,7 @@ import os
 
 import torch
 import numpy as np
-from model.unet_training import CE_Loss, Dice_loss, Focal_Loss
+from model.unet_training import CE_Loss, Dice_loss, Focal_Loss, bce_with_logits_loss, lovasz_hinge_loss
 
 from utils.utils import get_lr
 from torch.cuda.amp import autocast, GradScaler
@@ -101,6 +101,208 @@ def frequency_weighted_iou(output, target, num_classes):
             return 0.0
         fw_iou = sum(f * iou for f, iou in zip(frequencies, ious)) / total
         return fw_iou
+
+
+def _binary_logits_from_two_class(output: torch.Tensor) -> torch.Tensor:
+    """
+    将 2-class logits (N, 2, H, W) 转为 binary logits (N, H, W)。
+    softmax(output)[...,1] == sigmoid(output[:,1]-output[:,0])
+    """
+    if output.dim() != 4 or output.size(1) != 2:
+        raise ValueError(f"Expected output shape (N,2,H,W), got {tuple(output.shape)}")
+    return output[:, 1, :, :] - output[:, 0, :, :]
+
+
+def _binary_confusion_from_pred(pred: torch.Tensor, target: torch.Tensor, ignore_index: int | None = None):
+    """
+    计算二分类分割的混淆矩阵四项（按像素累加）。
+
+    Args:
+        pred: (N, H, W) 0/1
+        target: (N, H, W) 0/1
+        ignore_index: 可选忽略值
+    """
+    if ignore_index is not None:
+        valid = target != ignore_index
+        pred = pred[valid]
+        target = target[valid]
+
+    pred_fg = pred == 1
+    target_fg = target == 1
+
+    tp = torch.logical_and(pred_fg, target_fg).sum().item()
+    fp = torch.logical_and(pred_fg, torch.logical_not(target_fg)).sum().item()
+    fn = torch.logical_and(torch.logical_not(pred_fg), target_fg).sum().item()
+    tn = torch.logical_and(torch.logical_not(pred_fg), torch.logical_not(target_fg)).sum().item()
+    return tp, fp, fn, tn
+
+
+def binary_segmentation_metrics(tp: float, fp: float, fn: float, tn: float, eps: float = 1e-7):
+    precision = tp / (tp + fp + eps)
+    recall = tp / (tp + fn + eps)
+    dice = (2.0 * tp) / (2.0 * tp + fp + fn + eps)
+    iou = tp / (tp + fp + fn + eps)
+    accuracy = (tp + tn) / (tp + tn + fp + fn + eps)
+    return {
+        "Dice": float(dice),
+        "IoU": float(iou),
+        "Precision": float(precision),
+        "Recall": float(recall),
+        "Accuracy": float(accuracy),
+    }
+
+
+def binary_segmentation_loss(
+    outputs: torch.Tensor,
+    targets: torch.Tensor,
+    loss_name: str,
+    pos_weight: torch.Tensor | None = None,
+    ignore_index: int | None = None,
+):
+    """
+    二分类分割 loss：支持 BCE / Lovasz-hinge。
+
+    Args:
+        outputs: (N,2,H,W) logits
+        targets: (N,H,W) 0/1 或 ignore_index
+    """
+    logits = _binary_logits_from_two_class(outputs)
+    labels = (targets == 1).to(dtype=logits.dtype)
+
+    if ignore_index is not None:
+        valid = targets != ignore_index
+        logits = logits[valid]
+        labels = labels[valid]
+
+    if loss_name == "bce":
+        return bce_with_logits_loss(logits, labels, pos_weight=pos_weight)
+    if loss_name == "lovasz_hinge":
+        return lovasz_hinge_loss(logits, labels)
+
+    raise ValueError(f"Unsupported loss_name: {loss_name}")
+
+
+def train_one_epoch_binary(
+    model,
+    optimizer,
+    train_loader,
+    device,
+    loss_name: str,
+    pos_weight: torch.Tensor | None,
+    gpu_used,
+    scaler,
+    epoch,
+    train_epoch,
+    ignore_index: int | None = None,
+    max_batches: int | None = None,
+):
+    epoch_loss = 0.0
+    seen_batches = 0
+    model_train = model.train().to(device)
+
+    for iteration, batch in enumerate(train_loader):
+        imgs, pngs, _ = batch
+
+        imgs = imgs.to(device)
+        pngs = pngs.to(device)
+        optimizer.zero_grad()
+
+        if scaler is None:
+            outputs = model_train(imgs)
+            loss = binary_segmentation_loss(
+                outputs, pngs, loss_name=loss_name, pos_weight=pos_weight, ignore_index=ignore_index
+            )
+            loss.backward()
+            optimizer.step()
+        else:
+            with autocast():
+                outputs = model_train(imgs)
+                loss = binary_segmentation_loss(
+                    outputs, pngs, loss_name=loss_name, pos_weight=pos_weight, ignore_index=ignore_index
+                )
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+        epoch_loss += loss.item()
+        seen_batches += 1
+
+        if iteration == 0:
+            print(
+                f"{LogColor.GREEN}Epoch{LogColor.RESET}{' ' * 12}"
+                f"{LogColor.YELLOW}data_num{LogColor.RESET}{' ' * 12}"
+                f"{LogColor.YELLOW}GPU Mem{LogColor.RESET}{' ' * 12}"
+                f"{LogColor.YELLOW}Loss{LogColor.RESET}{' ' * 12}"
+                f"{LogColor.YELLOW}LR{LogColor.RESET}{' ' * 12}"
+                f"{LogColor.YELLOW}Image_size{LogColor.RESET}{' ' * 12}"
+            )
+
+        a = 1 if len(train_loader) >= 1 else len(train_loader)
+        Epoch_len = len("Epoch") + 12 - len(str(f"{epoch + 1}/{train_epoch}"))
+        batch_len = len("data_num") + 12 - len(str(f"{iteration + a}/{len(train_loader)}"))
+        GPU_len = len("GPU Mem") + 12 - len(str(f"{gpu_used:.2f} MB"))
+        Loss_len = len("Loss") + 12 - len(str(f"{loss.item():.8f}"))
+        LR_len = len("LR") + 12 - len(str(f"{get_lr(optimizer):.8f}"))
+
+        print(
+            f"\r{epoch + 1}/{train_epoch}{' ' * Epoch_len}"
+            f"{iteration + a}/{len(train_loader)}{' ' * batch_len}"
+            f"{gpu_used:.2f} MB{' ' * GPU_len}"
+            f"{loss.item():.8f}{' ' * Loss_len}"
+            f"{get_lr(optimizer):.8f}{' ' * LR_len}"
+            f"{imgs.shape[2]}",
+            end="",
+            flush=True,
+        )
+
+        if max_batches is not None and seen_batches >= max_batches:
+            break
+
+    print(f"{LogColor.GREEN}")
+    time.sleep(0.2)
+    return epoch_loss / max(seen_batches, 1)
+
+
+def evaluate_binary(
+    model,
+    val_loader,
+    device,
+    loss_name: str,
+    pos_weight: torch.Tensor | None,
+    ignore_index: int | None = None,
+    max_batches: int | None = None,
+):
+    model_eval = model.eval().to(device)
+
+    total_loss = 0.0
+    tp = fp = fn = tn = 0.0
+
+    with torch.no_grad():
+        seen_batches = 0
+        for batch in val_loader:
+            imgs, pngs, _ = batch
+            imgs = imgs.to(device)
+            pngs = pngs.to(device)
+
+            outputs = model_eval(imgs)
+            loss = binary_segmentation_loss(
+                outputs, pngs, loss_name=loss_name, pos_weight=pos_weight, ignore_index=ignore_index
+            )
+            total_loss += loss.item()
+
+            pred = outputs.argmax(dim=1)
+            _tp, _fp, _fn, _tn = _binary_confusion_from_pred(pred, pngs, ignore_index=ignore_index)
+            tp += _tp
+            fp += _fp
+            fn += _fn
+            tn += _tn
+            seen_batches += 1
+            if max_batches is not None and seen_batches >= max_batches:
+                break
+
+    metrics = binary_segmentation_metrics(tp, fp, fn, tn)
+    metrics["Loss"] = float(total_loss / max(seen_batches, 1))
+    return metrics
 
 
 def train_one_epoch(model, optimizer, train_loader, device, dice_loss, focal_loss,
