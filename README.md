@@ -39,6 +39,8 @@ uv sync
 bash run.sh --device cuda --data-config no-ai --epochs 50 --batch-size 16 --input-size 512
 ```
 
+如果本地没有 `hf_datasets/merged_dataset_v2/<no-ai|full>`，`run.sh` 会默认从 Hugging Face 数据集仓库下载到 `hf_datasets/merged_dataset_v2/`（可用 `--hf-repo` / `--hf-local-dir` 覆盖）。
+
 ### 训练
 
 ```bash

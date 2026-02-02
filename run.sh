@@ -29,6 +29,9 @@ Options:
   --weights       path       (default: weights/unet_resnet_voc.pth)
   --python        path       (default: .venv/bin/python)
   --cache-dir     path       (default: .hf-cache/datasets)
+  --hf-repo       repo_id    (default: tari-tech/13803867589-unet-image-seg)
+  --hf-revision   revision   (default: empty)
+  --hf-local-dir  path       (default: hf_datasets/merged_dataset_v2)
   -h, --help
 EOF
 }
@@ -43,6 +46,9 @@ SEED="11"
 WEIGHTS="weights/unet_resnet_voc.pth"
 PYTHON=".venv/bin/python"
 CACHE_DIR=".hf-cache/datasets"
+HF_REPO="tari-tech/13803867589-unet-image-seg"
+HF_REVISION=""
+HF_LOCAL_DIR="hf_datasets/merged_dataset_v2"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +62,9 @@ while [[ $# -gt 0 ]]; do
     --weights) WEIGHTS="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
     --cache-dir) CACHE_DIR="$2"; shift 2 ;;
+    --hf-repo) HF_REPO="$2"; shift 2 ;;
+    --hf-revision) HF_REVISION="$2"; shift 2 ;;
+    --hf-local-dir) HF_LOCAL_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1"; usage; exit 1 ;;
   esac
@@ -80,6 +89,44 @@ mkdir -p "$CACHE_DIR" ".hf-cache" ".mpl-cache" "run/train" "run/tables"
 export HF_HOME=".hf-cache"
 export HF_DATASETS_CACHE="$CACHE_DIR"
 export MPLCONFIGDIR=".mpl-cache"
+
+ensure_dataset() {
+  local cfg="$1"
+  local expected_dir="$HF_LOCAL_DIR/$cfg"
+  if [[ -d "$expected_dir" ]]; then
+    return 0
+  fi
+
+  echo ""
+  echo "=============================="
+  echo "Dataset not found: $expected_dir"
+  echo "Downloading from Hugging Face: $HF_REPO"
+  echo "Local dir: $HF_LOCAL_DIR"
+  echo "=============================="
+
+  mkdir -p "$HF_LOCAL_DIR"
+  "$PYTHON" - <<PY
+from huggingface_hub import snapshot_download
+
+repo_id = "$HF_REPO"
+local_dir = "$HF_LOCAL_DIR"
+revision = "$HF_REVISION".strip() or None
+
+snapshot_download(
+    repo_id=repo_id,
+    local_dir=local_dir,
+    local_dir_use_symlinks=False,
+    revision=revision,
+)
+print("Downloaded:", repo_id, "->", local_dir)
+PY
+
+  if [[ ! -d "$expected_dir" ]]; then
+    echo "Download finished, but still missing: $expected_dir"
+    echo "Check repo structure or pass --hf-local-dir / --hf-repo accordingly."
+    exit 1
+  fi
+}
 
 latest_exp_dir() {
   ls -dt run/train/exp* 2>/dev/null | head -n 1
@@ -147,6 +194,8 @@ echo "Data config: $DATA_CONFIG"
 echo "Device: $DEVICE"
 echo "Epochs: $EPOCHS  Batch: $BATCH_SIZE  Input: $INPUT_SIZE  Workers: $WORKERS  Seed: $SEED"
 echo ""
+
+ensure_dataset "$DATA_CONFIG"
 
 # 1) loss compare on unet_resnet50
 run_train "$MODEL_LOSS_COMPARE" "$LOSS_A"
