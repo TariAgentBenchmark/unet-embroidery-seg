@@ -105,7 +105,21 @@ ensure_dataset() {
   echo "=============================="
 
   mkdir -p "$HF_LOCAL_DIR"
-  "$PYTHON" - <<PY
+  if command -v huggingface-cli >/dev/null 2>&1; then
+    # Prefer CLI: supports resume and avoids python env mismatch.
+    args=(download "$HF_REPO" --repo-type dataset --local-dir "$HF_LOCAL_DIR")
+    if [[ -n "$HF_REVISION" ]]; then
+      args+=(--revision "$HF_REVISION")
+    fi
+    # Newer huggingface-cli defaults to no symlinks for local-dir, but keep compatible flag if available.
+    # If the flag is unsupported, the command will still fail; in that case we fall back to python.
+    set +e
+    huggingface-cli "${args[@]}" --resume-download
+    rc=$?
+    set -e
+    if [[ $rc -ne 0 ]]; then
+      echo "[WARN] huggingface-cli download failed (code=$rc). Falling back to python snapshot_download."
+      "$PYTHON" - <<PY
 from huggingface_hub import snapshot_download
 
 repo_id = "$HF_REPO"
@@ -114,12 +128,34 @@ revision = "$HF_REVISION".strip() or None
 
 snapshot_download(
     repo_id=repo_id,
+    repo_type="dataset",
     local_dir=local_dir,
     local_dir_use_symlinks=False,
     revision=revision,
+    resume_download=True,
 )
 print("Downloaded:", repo_id, "->", local_dir)
 PY
+    fi
+  else
+    "$PYTHON" - <<PY
+from huggingface_hub import snapshot_download
+
+repo_id = "$HF_REPO"
+local_dir = "$HF_LOCAL_DIR"
+revision = "$HF_REVISION".strip() or None
+
+snapshot_download(
+    repo_id=repo_id,
+    repo_type="dataset",
+    local_dir=local_dir,
+    local_dir_use_symlinks=False,
+    revision=revision,
+    resume_download=True,
+)
+print("Downloaded:", repo_id, "->", local_dir)
+PY
+  fi
 
   if [[ ! -d "$expected_dir" ]]; then
     echo "Download finished, but still missing: $expected_dir"
