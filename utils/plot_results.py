@@ -1,10 +1,17 @@
 import os
+import logging
 
 # 避免在受限环境下写入 $HOME/.matplotlib 失败
 os.environ.setdefault("MPLCONFIGDIR", ".mpl-cache")
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 import matplotlib.pyplot as plt
+from matplotlib import rcParams
+
+# 避免 Times New Roman 缺失导致大量 findfont 警告；使用通用 serif fallback
+rcParams["font.family"] = "serif"
+rcParams["font.serif"] = ["Times New Roman", "Times", "DejaVu Serif", "Liberation Serif"]
+logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 def plot_training_curves(train_losses, val_losses, val_metrics_history, weights_folder):
     # 准备数据
@@ -34,12 +41,12 @@ def plot_training_curves(train_losses, val_losses, val_metrics_history, weights_
     plt.plot(epochs, train_losses, label="Train Loss", linewidth=2)
     plt.plot(epochs, val_losses, label="Val Loss", linewidth=2)
 
-    plt.xlabel("Epoch", fontsize=14, fontname='Times New Roman')
-    plt.ylabel("Loss", fontsize=14, fontname='Times New Roman')
-    plt.xticks(fontsize=12, fontname='Times New Roman')
-    plt.yticks(fontsize=12, fontname='Times New Roman')
+    plt.xlabel("Epoch", fontsize=14)
+    plt.ylabel("Loss", fontsize=14)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
     plt.grid(True, which='both', linestyle='--', alpha=0.5)
-    plt.legend(prop={'family':'Times New Roman', 'size':12})
+    plt.legend(fontsize=12)
     plt.tight_layout()
     plt.savefig(os.path.join(weights_folder, "loss_curve.png"), dpi=300)
     plt.close()
@@ -51,12 +58,12 @@ def plot_training_curves(train_losses, val_losses, val_metrics_history, weights_
     for k in metric_keys:
         plt.plot(epochs, _get_series(k), label=k, linewidth=2)
 
-    plt.xlabel("Epoch", fontsize=14, fontname='Times New Roman')
-    plt.ylabel("Score", fontsize=14, fontname='Times New Roman')
-    plt.xticks(fontsize=12, fontname='Times New Roman')
-    plt.yticks(fontsize=12, fontname='Times New Roman')
+    plt.xlabel("Epoch", fontsize=14)
+    plt.ylabel("Score", fontsize=14)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
     plt.grid(True, which='both', linestyle='--', alpha=0.5)
-    plt.legend(prop={'family':'Times New Roman', 'size':12})
+    plt.legend(fontsize=12)
     plt.tight_layout()
     plt.savefig(os.path.join(weights_folder, "metrics_curve.png"), dpi=300)
     plt.close()
