@@ -149,7 +149,7 @@ def train(args):
     )
 
     model = create_model(args.model, num_classes=num_classes, weights=args.weights)
-    scaler = torch.cuda.amp.GradScaler() if args.amp else None
+    scaler = torch.amp.GradScaler(device.type, enabled=args.amp and device.type == "cuda")
 
     optimizer, lr_scheduler_func = get_optimizer_and_lr(
         model, batch_size, train_epoch, args.momentum, args.weight_decay
@@ -390,7 +390,7 @@ def parse_args():
         "--amp",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use torch.cuda.amp for mixed precision training",
+        help="Use torch.amp autocast + GradScaler for mixed precision training",
     )
     parser.add_argument("--seed", default=11, type=int, help="Random seed")
     parser.add_argument("--cache-dir", default=".hf-cache/datasets",

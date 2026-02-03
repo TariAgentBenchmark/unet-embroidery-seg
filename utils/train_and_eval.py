@@ -5,7 +5,7 @@ import numpy as np
 from model.unet_training import CE_Loss, Dice_loss, Focal_Loss, bce_with_logits_loss, lovasz_hinge_loss
 
 from utils.utils import get_lr
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
 import time
 
 
@@ -215,7 +215,7 @@ def train_one_epoch_binary(
             loss.backward()
             optimizer.step()
         else:
-            with autocast():
+            with autocast(device_type=device.type, enabled=True):
                 outputs = model_train(imgs)
                 loss = binary_segmentation_loss(
                     outputs, pngs, loss_name=loss_name, pos_weight=pos_weight, ignore_index=ignore_index
@@ -349,7 +349,7 @@ def train_one_epoch(model, optimizer, train_loader, device, dice_loss, focal_los
             loss.backward()
             optimizer.step()  # 更新模型参数
         else:
-            with autocast():
+            with autocast(device_type=device.type, enabled=True):
                 outputs = model_train(imgs)  # 通过模型获取预测结果
 
                 # 损失计算
