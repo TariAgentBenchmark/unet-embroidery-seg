@@ -10,6 +10,7 @@ Usage:
 
 import os
 import sys
+import base64
 from pathlib import Path
 from typing import List, Tuple, Optional
 from PIL import Image
@@ -17,6 +18,92 @@ import numpy as np
 import torch
 
 import click
+
+from openai import OpenAI
+
+
+def get_vlm_client() -> OpenAI:
+    
+    api_key = os.environ.get("VLM_API_KEY")
+    base_url = os.environ.get("VLM_BASE_URL", "https://api.openai.com/v1")
+    
+    if not api_key:
+        raise ValueError("VLM_API_KEY environment variable not set")
+    
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+
+def encode_image_to_base64(image_path: str) -> str:
+    """将图片编码为 base64"""
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def generate_prompt_with_vlm(
+    image_path: str,
+    category: str,
+    client: "OpenAI",
+    model: str = None,
+) -> str:
+    """使用多模态大模型生成 prompt
+    
+    Args:
+        image_path: 图片路径
+        category: 类别名称（动物类/植物类/复合类）
+        client: OpenAI 客户端
+        model: 模型名称，默认从环境变量 VLM_MODEL 获取
+    
+    Returns:
+        生成的 prompt 字符串
+    """
+    if model is None:
+        model = os.environ.get("VLM_MODEL", "gpt-4o")
+    
+    base64_image = encode_image_to_base64(image_path)
+    
+    # 根据类别构建不同的提示词
+    category_hints = {
+        "动物类": "animal or creature patterns",
+        "植物类": "floral, botanical or plant patterns",
+        "复合类": "decorative, ornamental or composite patterns",
+    }
+    hint = category_hints.get(category, "pattern")
+    
+    system_prompt = f"""You are an expert in analyzing traditional embroidery and textile patterns.
+Your task is to describe the main pattern/motif in the image for segmentation purposes.
+
+The image contains: {hint}
+
+Provide a concise description (10-20 words) that would help an AI segmentation model identify and segment the main pattern. Focus on:
+- The type of pattern/motif
+- Key visual characteristics
+- Colors and shapes
+- Style (traditional, modern, etc.)
+
+Output only the description, nothing else."""
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{base64_image}",
+                        },
+                    },
+                ],
+            },
+        ],
+        max_tokens=100,
+        temperature=0.3,
+    )
+    
+    prompt = response.choices[0].message.content.strip()
+    return prompt
 
 # 类别到 prompt 的映射
 CATEGORY_PROMPTS = {
@@ -91,6 +178,17 @@ def cli():
     default=None,
     help="每个类别最大处理图像数（用于测试）",
 )
+@click.option(
+    "--use-vlm",
+    is_flag=True,
+    help="使用多模态大模型生成 prompt（需要配置环境变量 VLM_API_KEY, VLM_BASE_URL, VLM_MODEL）",
+)
+@click.option(
+    "--vlm-cache",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="VLM prompt 缓存目录（避免重复调用 API）",
+)
 def relabel(
     input_dir: Path,
     output_dir: Path,
@@ -99,6 +197,8 @@ def relabel(
     confidence: float,
     device: str,
     max_images: Optional[int],
+    use_vlm: bool,
+    vlm_cache: Optional[Path],
 ):
     """使用 SAM3 重新标注数据集"""
     
@@ -106,20 +206,21 @@ def relabel(
     
     click.echo(f"Device: {device}")
     
+    # 如果使用 VLM，检查环境变量
+    vlm_client = None
+    vlm_model = None
+    if use_vlm:
+        vlm_client = get_vlm_client()
+        vlm_model = os.environ.get("VLM_MODEL", "gpt-4o")
+        click.echo(f"VLM Model: {vlm_model}")
+        click.echo(f"VLM Base URL: {os.environ.get('VLM_BASE_URL', 'https://api.openai.com/v1')}")
+        
+        if vlm_cache:
+            vlm_cache.mkdir(parents=True, exist_ok=True)
+            click.echo(f"VLM cache: {vlm_cache}")
+    
     # 加载 SAM3 模型
-    try:
-        model, processor = load_sam3_model(checkpoint, device)
-    except Exception as e:
-        click.echo(f"Error loading model: {e}", err=True)
-        click.echo("\nPlease ensure you have:", err=True)
-        click.echo("1. Downloaded the SAM3 model checkpoint to weights/sam3/sam3.pt", err=True)
-        click.echo("2. Generated BPE tokenizer file", err=True)
-        click.echo("\nTo download the model:", err=True)
-        click.echo("  python sam3_relabel.py download-script", err=True)
-        click.echo("  bash download_sam3_model.sh", err=True)
-        click.echo("\nTo verify environment:", err=True)
-        click.echo("  python sam3_relabel.py check", err=True)
-        raise click.Abort()
+    model, processor = load_sam3_model(checkpoint, device)
     
     # 处理每个类别
     for category in categories:
@@ -131,6 +232,10 @@ def relabel(
             category,
             confidence,
             max_images,
+            use_vlm,
+            vlm_client,
+            vlm_model,
+            vlm_cache,
         )
     
     click.echo("\nDone!")
@@ -168,12 +273,8 @@ def check():
         ("click", "click"),
     ]
     for name, import_name in packages:
-        try:
-            __import__(import_name)
-            click.echo(f"  ✓ {name}")
-        except ImportError:
-            click.echo(f"  ✗ {name} (NOT INSTALLED)")
-            all_ok = False
+        __import__(import_name)
+        click.echo(f"  ✓ {name}")
     
     # 检查 BPE Tokenizer
     click.echo("\n[BPE Tokenizer]")
@@ -210,21 +311,37 @@ def check():
     
     # 检查 CUDA
     click.echo("\n[CUDA]")
-    try:
-        if torch.cuda.is_available():
-            click.echo(f"  ✓ CUDA available: {torch.cuda.get_device_name(0)}")
-            mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            click.echo(f"    Memory: {mem:.1f} GB")
-        else:
-            click.echo("  ! CUDA not available (will use CPU)")
-    except Exception as e:
-        click.echo(f"  ✗ Error checking CUDA: {e}")
+    if torch.cuda.is_available():
+        click.echo(f"  ✓ CUDA available: {torch.cuda.get_device_name(0)}")
+        mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        click.echo(f"    Memory: {mem:.1f} GB")
+    else:
+        click.echo("  ! CUDA not available (will use CPU)")
+    
+    # 检查 VLM 环境变量
+    click.echo("\n[VLM Configuration]")
+    vlm_api_key = os.environ.get("VLM_API_KEY")
+    vlm_base_url = os.environ.get("VLM_BASE_URL", "https://api.openai.com/v1")
+    vlm_model = os.environ.get("VLM_MODEL", "gpt-4o")
+    
+    if vlm_api_key:
+        masked_key = vlm_api_key[:8] + "..." + vlm_api_key[-4:] if len(vlm_api_key) > 12 else "***"
+        click.echo(f"  ✓ VLM_API_KEY: {masked_key}")
+    else:
+        click.echo("  ! VLM_API_KEY: not set (required for --use-vlm)")
+    
+    click.echo(f"  • VLM_BASE_URL: {vlm_base_url}")
+    click.echo(f"  • VLM_MODEL: {vlm_model}")
     
     # 总结
     click.echo("\n" + "=" * 60)
     if all_ok:
         click.echo("✓ All checks passed! You can run SAM3 now.")
-        click.echo("\nRun: python sam3_relabel.py relabel --checkpoint weights/sam3/sam3.pt")
+        click.echo("\nBasic usage:")
+        click.echo("  python sam3_relabel.py relabel --checkpoint weights/sam3/sam3.pt")
+        click.echo("\nWith VLM-generated prompts:")
+        click.echo("  export VLM_API_KEY=your_key")
+        click.echo("  python sam3_relabel.py relabel --checkpoint weights/sam3/sam3.pt --use-vlm")
     else:
         click.echo("✗ Some checks failed. Please fix the issues above.")
     click.echo("=" * 60)
@@ -344,20 +461,16 @@ def segment_with_sam3(
     all_scores = []
     
     for prompt in prompts:
-        try:
-            output = processor.set_text_prompt(state=inference_state, prompt=prompt)
-            masks = output["masks"]
-            scores = output["scores"]
-            
-            for i, score in enumerate(scores):
-                if score >= confidence_threshold:
-                    mask = masks[i].cpu().numpy() if torch.is_tensor(masks[i]) else masks[i]
-                    all_masks.append(mask)
-                    all_labels.append(prompt)
-                    all_scores.append(float(score))
-        except Exception as e:
-            click.echo(f"  Warning: Failed with prompt '{prompt}': {e}")
-            continue
+        output = processor.set_text_prompt(state=inference_state, prompt=prompt)
+        masks = output["masks"]
+        scores = output["scores"]
+        
+        for i, score in enumerate(scores):
+            if score >= confidence_threshold:
+                mask = masks[i].cpu().numpy() if torch.is_tensor(masks[i]) else masks[i]
+                all_masks.append(mask)
+                all_labels.append(prompt)
+                all_scores.append(float(score))
     
     return all_masks, all_labels, all_scores
 
@@ -407,9 +520,14 @@ def process_category(
     category: str,
     confidence_threshold: float = 0.3,
     max_images: Optional[int] = None,
+    use_vlm: bool = False,
+    vlm_client = None,
+    vlm_model: str = None,
+    vlm_cache: Optional[Path] = None,
 ):
     """处理一个类别的所有图像"""
-    prompts = CATEGORY_PROMPTS.get(category, [category])
+    # 默认 prompts
+    default_prompts = CATEGORY_PROMPTS.get(category, [category])
     
     image_files = sorted(input_dir.glob(f"{category}*.png"))
     
@@ -418,7 +536,10 @@ def process_category(
     
     click.echo(f"\nProcessing category: {category}")
     click.echo(f"Found {len(image_files)} images")
-    click.echo(f"Using prompts: {prompts}")
+    if use_vlm:
+        click.echo(f"Using VLM to generate prompts (model: {vlm_model})")
+    else:
+        click.echo(f"Using default prompts: {default_prompts}")
     
     for i, image_path in enumerate(image_files):
         click.echo(f"  [{i+1}/{len(image_files)}] {image_path.name}")
@@ -428,19 +549,27 @@ def process_category(
             click.echo("    Already processed, skipping")
             continue
         
-        try:
-            image = load_image(str(image_path))
-        except Exception as e:
-            click.echo(f"    Error loading image: {e}")
-            continue
+        image = load_image(str(image_path))
         
-        try:
-            masks, labels, scores = segment_with_sam3(
-                model, processor, image, prompts, confidence_threshold
+        # 确定 prompts
+        prompts = default_prompts
+        if use_vlm:
+            cache_file = None
+            if vlm_cache:
+                cache_file = vlm_cache / f"{image_path.stem}_prompt.txt"
+            
+            prompts = get_or_generate_prompt(
+                str(image_path),
+                category,
+                vlm_client,
+                vlm_model,
+                cache_file,
             )
-        except Exception as e:
-            click.echo(f"    Error segmenting: {e}")
-            continue
+            click.echo(f"    VLM prompt: {prompts[0][:80]}...")
+        
+        masks, labels, scores = segment_with_sam3(
+            model, processor, image, prompts, confidence_threshold
+        )
         
         if not masks:
             click.echo("    No masks found")
@@ -454,6 +583,35 @@ def process_category(
         # 保存为 PNG
         mask_img = Image.fromarray(mask)
         mask_img.save(output_path)
+
+
+def get_or_generate_prompt(
+    image_path: str,
+    category: str,
+    client,
+    model: str,
+    cache_file: Optional[Path] = None,
+) -> List[str]:
+    """获取或生成 prompt
+    
+    如果缓存文件存在，直接读取；否则调用 VLM 生成并缓存
+    
+    Returns:
+        prompt 列表（单元素列表，兼容原有接口）
+    """
+    # 检查缓存
+    if cache_file and cache_file.exists():
+        prompt = cache_file.read_text().strip()
+        return [prompt]
+    
+    # 调用 VLM 生成
+    prompt = generate_prompt_with_vlm(image_path, category, client, model)
+    
+    # 保存缓存
+    if cache_file:
+        cache_file.write_text(prompt)
+    
+    return [prompt]
 
 
 if __name__ == "__main__":
