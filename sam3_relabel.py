@@ -18,6 +18,10 @@ import numpy as np
 import torch
 
 import click
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 from openai import OpenAI
 
