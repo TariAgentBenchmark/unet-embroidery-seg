@@ -11,6 +11,9 @@ Usage:
 import os
 import sys
 import base64
+import random
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional
 from PIL import Image
@@ -67,18 +70,8 @@ def generate_prompt_with_vlm(
     
     base64_image = encode_image_to_base64(image_path)
     
-    # 根据类别构建不同的提示词
-    category_hints = {
-        "动物类": "animal or creature patterns",
-        "植物类": "floral, botanical or plant patterns",
-        "复合类": "decorative, ornamental or composite patterns",
-    }
-    hint = category_hints.get(category, "pattern")
-    
-    system_prompt = f"""You are an expert in analyzing traditional embroidery and textile patterns.
+    system_prompt = """You are an expert in analyzing traditional embroidery and textile patterns.
 Your task is to describe the main pattern/motif in the image for segmentation purposes.
-
-The image contains: {hint}
 
 Provide a concise description (10-20 words) that would help an AI segmentation model identify and segment the main pattern. Focus on:
 - The type of pattern/motif
@@ -192,8 +185,20 @@ def cli():
 @click.option(
     "--vlm-cache",
     type=click.Path(file_okay=False, path_type=Path),
+    default=Path("vlm_cache"),
+    help="VLM prompt 缓存目录（默认: vlm_cache）",
+)
+@click.option(
+    "--vlm-workers",
+    type=int,
+    default=4,
+    help="VLM API 调用并行度（默认: 4）",
+)
+@click.option(
+    "--sample",
+    type=int,
     default=None,
-    help="VLM prompt 缓存目录（避免重复调用 API）",
+    help="随机抽取 n 张图片进行处理（默认: 处理全部）",
 )
 def relabel(
     input_dir: Path,
@@ -205,6 +210,8 @@ def relabel(
     max_images: Optional[int],
     use_vlm: bool,
     vlm_cache: Optional[Path],
+    vlm_workers: int,
+    sample: Optional[int],
 ):
     """使用 SAM3 重新标注数据集"""
     
@@ -223,9 +230,9 @@ def relabel(
         click.echo(f"VLM Model: {vlm_model}")
         click.echo(f"VLM Base URL: {os.environ.get('VLM_BASE_URL', 'https://api.openai.com/v1')}")
         
-        if vlm_cache:
-            vlm_cache.mkdir(parents=True, exist_ok=True)
-            click.echo(f"VLM cache: {vlm_cache}")
+        vlm_cache.mkdir(parents=True, exist_ok=True)
+        click.echo(f"VLM cache: {vlm_cache}")
+        click.echo(f"VLM workers: {vlm_workers}")
     
     # 加载 SAM3 模型
     model, processor = load_sam3_model(checkpoint, device)
@@ -244,6 +251,8 @@ def relabel(
             vlm_client,
             vlm_model,
             vlm_cache,
+            vlm_workers,
+            sample,
         )
     
     click.echo("\nDone!")
@@ -537,6 +546,8 @@ def process_category(
     vlm_client = None,
     vlm_model: str = None,
     vlm_cache: Optional[Path] = None,
+    vlm_workers: int = 4,
+    sample: Optional[int] = None,
 ):
     """处理一个类别的所有图像"""
     # 默认 prompts
@@ -547,13 +558,23 @@ def process_category(
     if max_images:
         image_files = image_files[:max_images]
     
+    # 随机抽样
+    if sample and len(image_files) > sample:
+        image_files = random.sample(image_files, sample)
+        image_files = sorted(image_files)
+    
     click.echo(f"\nProcessing category: {category}")
     click.echo(f"Found {len(image_files)} images")
-    if use_vlm:
-        click.echo(f"Using VLM to generate prompts (model: {vlm_model})")
-    else:
-        click.echo(f"Using default prompts: {default_prompts}")
     
+    # 阶段1: 批量生成 VLM prompt 缓存（如果需要）
+    if use_vlm:
+        click.echo(f"\n[Phase 1] Generating VLM prompts (model: {vlm_model}, workers: {vlm_workers})")
+        _generate_vlm_cache_batch(
+            image_files, category, vlm_client, vlm_model, vlm_cache, vlm_workers
+        )
+    
+    # 阶段2: 串行调用 SAM 进行分割
+    click.echo(f"\n[Phase 2] Running SAM3 segmentation")
     for i, image_path in enumerate(image_files):
         click.echo(f"  [{i+1}/{len(image_files)}] {image_path.name}")
         
@@ -567,18 +588,13 @@ def process_category(
         # 确定 prompts
         prompts = default_prompts
         if use_vlm:
-            cache_file = None
-            if vlm_cache:
-                cache_file = vlm_cache / f"{image_path.stem}_prompt.txt"
-            
-            prompts = get_or_generate_prompt(
-                str(image_path),
-                category,
-                vlm_client,
-                vlm_model,
-                cache_file,
-            )
-            click.echo(f"    VLM prompt: {prompts[0][:80]}...")
+            cache_file = vlm_cache / f"{image_path.stem}_prompt.txt"
+            prompts = get_cached_prompt(cache_file)
+            if prompts is None:
+                click.echo("    Warning: VLM cache not found, using default prompt")
+                prompts = default_prompts
+            else:
+                click.echo(f"    VLM prompt: {prompts[0][:80]}...")
         
         masks, labels, scores = segment_with_sam3(
             model, processor, image, prompts, confidence_threshold
@@ -625,6 +641,67 @@ def get_or_generate_prompt(
         cache_file.write_text(prompt)
     
     return [prompt]
+
+
+def get_cached_prompt(cache_file: Path) -> Optional[List[str]]:
+    """从缓存文件读取 prompt
+    
+    Returns:
+        prompt 列表，如果缓存不存在则返回 None
+    """
+    if cache_file.exists():
+        prompt = cache_file.read_text().strip()
+        return [prompt]
+    return None
+
+
+def _generate_vlm_cache_batch(
+    image_files: List[Path],
+    category: str,
+    client,
+    model: str,
+    vlm_cache: Path,
+    workers: int = 4,
+):
+    """批量生成 VLM prompt 缓存（并行）
+    
+    遍历所有图片，对没有缓存的图片并行调用 VLM 生成 prompt
+    """
+    need_generation = []
+    for image_path in image_files:
+        cache_file = vlm_cache / f"{image_path.stem}_prompt.txt"
+        if not cache_file.exists():
+            need_generation.append((image_path, cache_file))
+    
+    if not need_generation:
+        click.echo("  All prompts cached, skipping VLM generation")
+        return
+    
+    click.echo(f"  Generating {len(need_generation)} prompts with {workers} workers...")
+    
+    # 线程锁用于同步输出
+    print_lock = threading.Lock()
+    completed = [0]
+    
+    def generate_single(item):
+        image_path, cache_file = item
+        try:
+            prompt = generate_prompt_with_vlm(str(image_path), category, client, model)
+            cache_file.write_text(prompt)
+            with print_lock:
+                completed[0] += 1
+                click.echo(f"    [{completed[0]}/{len(need_generation)}] {image_path.name}")
+                click.echo(f"      -> {prompt[:80]}...")
+            return True
+        except Exception as e:
+            with print_lock:
+                completed[0] += 1
+                click.echo(f"    [{completed[0]}/{len(need_generation)}] {image_path.name} FAILED: {e}")
+            return False
+    
+    # 使用线程池并行处理
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(generate_single, need_generation))
 
 
 if __name__ == "__main__":

@@ -85,3 +85,5 @@ uv.lock
 # Local caches (avoid writing to $HOME/.cache in restricted envs)
 .hf-cache/
 .mpl-cache/
+.env
+vlm_cache/
