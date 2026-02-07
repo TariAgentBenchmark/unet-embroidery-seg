@@ -13,6 +13,7 @@ dependencies = [
     "tqdm>=4.66.0",
     "matplotlib>=3.7.0",
     "opencv-python>=4.8.0",
+    "modelscope>=1.34.0",
 ]
 
 [project.optional-dependencies]
