@@ -42,7 +42,7 @@ def encode_image_to_base64(image_path: str) -> str:
 def generate_prompt_with_vlm(
     image_path: str,
     category: str,
-    client: "OpenAI",
+    client: OpenAI,
     model: str = None,
 ) -> str:
     """使用多模态大模型生成 prompt
@@ -51,13 +51,15 @@ def generate_prompt_with_vlm(
         image_path: 图片路径
         category: 类别名称（动物类/植物类/复合类）
         client: OpenAI 客户端
-        model: 模型名称，默认从环境变量 VLM_MODEL 获取
+        model: 模型名称，必须从环境变量 VLM_MODEL 获取
     
     Returns:
         生成的 prompt 字符串
     """
     if model is None:
-        model = os.environ.get("VLM_MODEL", "gpt-4o")
+        model = os.environ.get("VLM_MODEL")
+        if not model:
+            raise ValueError("VLM_MODEL environment variable not set")
     
     base64_image = encode_image_to_base64(image_path)
     
@@ -210,8 +212,10 @@ def relabel(
     vlm_client = None
     vlm_model = None
     if use_vlm:
+        vlm_model = os.environ.get("VLM_MODEL")
+        if not vlm_model:
+            raise ValueError("VLM_MODEL environment variable not set (required when using --use-vlm)")
         vlm_client = get_vlm_client()
-        vlm_model = os.environ.get("VLM_MODEL", "gpt-4o")
         click.echo(f"VLM Model: {vlm_model}")
         click.echo(f"VLM Base URL: {os.environ.get('VLM_BASE_URL', 'https://api.openai.com/v1')}")
         
@@ -322,7 +326,7 @@ def check():
     click.echo("\n[VLM Configuration]")
     vlm_api_key = os.environ.get("VLM_API_KEY")
     vlm_base_url = os.environ.get("VLM_BASE_URL", "https://api.openai.com/v1")
-    vlm_model = os.environ.get("VLM_MODEL", "gpt-4o")
+    vlm_model = os.environ.get("VLM_MODEL")
     
     if vlm_api_key:
         masked_key = vlm_api_key[:8] + "..." + vlm_api_key[-4:] if len(vlm_api_key) > 12 else "***"
@@ -330,8 +334,12 @@ def check():
     else:
         click.echo("  ! VLM_API_KEY: not set (required for --use-vlm)")
     
-    click.echo(f"  • VLM_BASE_URL: {vlm_base_url}")
-    click.echo(f"  • VLM_MODEL: {vlm_model}")
+    if vlm_model:
+        click.echo(f"  ✓ VLM_MODEL: {vlm_model}")
+    else:
+        click.echo("  ! VLM_MODEL: not set (required for --use-vlm)")
+    
+    click.echo(f"  • VLM_BASE_URL: {vlm_base_url} (optional, has default)")
     
     # 总结
     click.echo("\n" + "=" * 60)
@@ -341,6 +349,7 @@ def check():
         click.echo("  python sam3_relabel.py relabel --checkpoint weights/sam3/sam3.pt")
         click.echo("\nWith VLM-generated prompts:")
         click.echo("  export VLM_API_KEY=your_key")
+        click.echo("  export VLM_MODEL=gpt-4o")
         click.echo("  python sam3_relabel.py relabel --checkpoint weights/sam3/sam3.pt --use-vlm")
     else:
         click.echo("✗ Some checks failed. Please fix the issues above.")
