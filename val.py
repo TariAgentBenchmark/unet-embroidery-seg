@@ -1,6 +1,7 @@
 # 导入标准库和第三方库
 import os
 import torch
+import numpy as np
 from torch.utils.data import DataLoader
 
 # 导入自定义模块和模型
@@ -22,6 +23,8 @@ def val(args):
     """验证函数"""
     if args.task == "binary":
         num_classes = 2
+    elif args.task == "multitask":
+        num_classes = 2
     else:
         num_classes = args.num_classes + 1
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -37,8 +40,9 @@ def val(args):
         augmentation=False,
         split="test",
         config=args.data_config,
-        task=args.task,
+        task="binary" if args.task == "multitask" else args.task,
         cache_dir=args.cache_dir,
+        return_cls_label=(args.task == "multitask"),
     )
     
     print(f"Test samples: {len(val_dataset)}")
@@ -54,7 +58,11 @@ def val(args):
         sampler=None
     )
 
-    model = build_model(args.model, num_classes=num_classes)
+    # 创建模型
+    if args.task == "multitask":
+        model = build_model(args.model, num_classes=1, num_seg_classes=1, num_cls_classes=3)
+    else:
+        model = build_model(args.model, num_classes=num_classes)
     
     # 加载权重
     weights_dict = torch.load(args.weights, map_location=device)
@@ -64,7 +72,69 @@ def val(args):
     print(f"Model loaded from: {args.weights}")
     print("Starting evaluation...\n")
     
-    if args.task == "binary":
+    if args.task == "multitask":
+        # 多任务验证
+        model.eval()
+        correct = 0
+        total = 0
+        seg_preds_list = []
+        seg_targets_list = []
+        cls_preds_list = []
+        cls_targets_list = []
+        
+        class_names = ["动物类", "植物类", "复合类"]
+        
+        with torch.no_grad():
+            for batch in val_loader:
+                images, seg_targets, _, cls_targets = batch
+                images = images.to(device)
+                seg_targets = seg_targets.to(device)
+                
+                seg_logits, cls_logits = model(images)
+                
+                # 分类预测
+                _, predicted = cls_logits.max(1)
+                total += cls_targets.size(0)
+                correct += predicted.eq(cls_targets.to(device)).sum().item()
+                cls_preds_list.extend(predicted.cpu().numpy())
+                cls_targets_list.extend(cls_targets.numpy())
+                
+                # 分割预测
+                seg_preds = (torch.sigmoid(seg_logits) > 0.5).squeeze(1).cpu().numpy()
+                seg_preds_list.extend(seg_preds)
+                seg_targets_list.extend(seg_targets.cpu().numpy())
+        
+        # 计算分割指标
+        seg_preds = np.array(seg_preds_list)
+        seg_targets = np.array(seg_targets_list)
+        intersection = ((seg_preds == 1) & (seg_targets == 1)).sum()
+        union = ((seg_preds == 1) | (seg_targets == 1)).sum()
+        iou = intersection / (union + 1e-6)
+        dice = 2 * intersection / (seg_preds.sum() + seg_targets.sum() + 1e-6)
+        cls_acc = 100. * correct / total
+        
+        # 计算每个类别的准确率
+        cls_preds = np.array(cls_preds_list)
+        cls_targets = np.array(cls_targets_list)
+        
+        print("=" * 50)
+        print(f"{LogColor.BLUE}Multi-Task Evaluation Results{LogColor.RESET}")
+        print("=" * 50)
+        print(f"\n{LogColor.RED}Segmentation Metrics:{LogColor.RESET}")
+        print(f"  IoU:  {iou:.4f}")
+        print(f"  Dice: {dice:.4f}")
+        
+        print(f"\n{LogColor.RED}Classification Metrics:{LogColor.RESET}")
+        print(f"  Overall Accuracy: {cls_acc:.2f}%")
+        print(f"\n  Per-Class Accuracy:")
+        for i, name in enumerate(class_names):
+            mask = cls_targets == i
+            if mask.sum() > 0:
+                acc = (cls_preds[mask] == i).sum() / mask.sum() * 100
+                print(f"    {name}: {acc:.2f}% ({mask.sum()} samples)")
+        print("=" * 50)
+        
+    elif args.task == "binary":
         metrics = evaluate_binary(model, val_loader, device, loss_name=args.loss, pos_weight=None, ignore_index=None)
         print(
             f"{LogColor.RED}Dice{LogColor.RESET}\t"
@@ -95,13 +165,13 @@ def parse_args():
                         help="Dataset config to use: 'full', 'no-ai', or 'sam3'")
     parser.add_argument("--weights", default="weights/unet_resnet_voc.pth",
                         help="Path to model weights")
-    parser.add_argument("--task", default="binary", choices=["binary", "multiclass"],
-                        help="Segmentation task: 'binary' or 'multiclass'")
+    parser.add_argument("--task", default="binary", choices=["binary", "multiclass", "multitask"],
+                        help="Segmentation task: 'binary', 'multiclass', or 'multitask'")
     parser.add_argument(
         "--model",
         default="unet_resnet50",
         choices=sorted(SUPPORTED_MODELS.keys()),
-        help="Model architecture",
+        help="Model architecture (use 'multitask_unet' for multitask)",
     )
     parser.add_argument("--loss", default="lovasz_hinge", choices=["bce", "lovasz_hinge", "ce", "focal"],
                         help="Loss name (only used to report Loss for binary)")

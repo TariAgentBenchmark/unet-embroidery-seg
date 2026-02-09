@@ -14,7 +14,8 @@ import subprocess
 
 # 导入自定义模块和模型
 from model.model_factory import build_model, load_weights_flexible, SUPPORTED_MODELS
-from model.unet_training import get_lr_scheduler, set_optimizer_lr, weights_init
+from model.unet_training import get_lr_scheduler, set_optimizer_lr, weights_init, lovasz_hinge_loss
+from model.unet_multitask import MultiTaskLoss
 from utils.hf_dataloader import HFUnetDataset, hf_unet_dataset_collate
 from utils.utils import seed_everything, worker_init_fn
 from utils.train_and_eval import (
@@ -44,9 +45,12 @@ def get_gpu_usage():
         return 0
 
 
-def create_model(model_name, num_classes, weights):
+def create_model(model_name, num_classes, weights, num_seg_classes=1, num_cls_classes=3):
     """创建模型"""
-    model = build_model(model_name, num_classes=num_classes)
+    if model_name == "multitask_unet":
+        model = build_model(model_name, num_classes=num_classes, num_seg_classes=num_seg_classes, num_cls_classes=num_cls_classes)
+    else:
+        model = build_model(model_name, num_classes=num_classes)
     weights_init(model)
 
     if weights:
@@ -80,6 +84,9 @@ def train(args):
     if args.task == "binary":
         # 二分类：背景(0) + 前景(1)
         num_classes = 2
+    elif args.task == "multitask":
+        # 多任务：分割是二分类
+        num_classes = 2
     else:
         # 多分类：args.num_classes 为前景类数量（不含背景）
         num_classes = args.num_classes + 1
@@ -101,6 +108,10 @@ def train(args):
 
     # 创建 Hugging Face 数据集
     print(f"Loading HF Dataset from: {args.data_path}, config: {args.data_config}")
+    
+    # 多任务模式需要返回类别标签
+    return_cls_label = (args.task == "multitask")
+    
     train_dataset = HFUnetDataset(
         args.data_path, 
         input_shape, 
@@ -108,8 +119,9 @@ def train(args):
         augmentation=True, 
         split="train",
         config=args.data_config,
-        task=args.task,
+        task="binary" if args.task == "multitask" else args.task,
         cache_dir=args.cache_dir,
+        return_cls_label=return_cls_label,
     )
     val_dataset = HFUnetDataset(
         args.data_path, 
@@ -118,8 +130,9 @@ def train(args):
         augmentation=False, 
         split="validation",
         config=args.data_config,
-        task=args.task,
+        task="binary" if args.task == "multitask" else args.task,
         cache_dir=args.cache_dir,
+        return_cls_label=return_cls_label,
     )
     
     print(f"Train samples: {len(train_dataset)}, Val samples: {len(val_dataset)}")
@@ -148,7 +161,12 @@ def train(args):
         worker_init_fn=partial(worker_init_fn, seed=args.seed)
     )
 
-    model = create_model(args.model, num_classes=num_classes, weights=args.weights)
+    # 创建模型
+    if args.task == "multitask":
+        model = create_model(args.model, num_classes=1, weights=args.weights, num_seg_classes=1, num_cls_classes=3)
+    else:
+        model = create_model(args.model, num_classes=num_classes, weights=args.weights)
+    
     scaler = torch.amp.GradScaler(device.type, enabled=args.amp and device.type == "cuda")
 
     optimizer, lr_scheduler_func = get_optimizer_and_lr(
@@ -190,11 +208,62 @@ def train(args):
     max_val_batches = args.max_val_batches if args.max_val_batches and args.max_val_batches > 0 else None
     max_test_batches = args.max_test_batches if args.max_test_batches and args.max_test_batches > 0 else None
 
+    # 多任务损失函数
+    if args.task == "multitask":
+        if args.loss == "bce":
+            seg_loss_fn = torch.nn.BCEWithLogitsLoss()
+        elif args.loss == "lovasz_hinge":
+            seg_loss_fn = lovasz_hinge_loss
+        else:
+            seg_loss_fn = torch.nn.BCEWithLogitsLoss()
+        multitask_criterion = MultiTaskLoss(seg_loss_fn=seg_loss_fn, cls_loss_weight=args.cls_loss_weight)
+
     for epoch in range(train_epoch):
         gpu_used = get_gpu_usage()
         set_optimizer_lr(optimizer, lr_scheduler_func, epoch)
 
-        if args.task == "binary":
+        if args.task == "multitask":
+            # 多任务训练
+            model.train()
+            total_loss = 0
+            total_seg_loss = 0
+            total_cls_loss = 0
+            correct = 0
+            total = 0
+            
+            for batch_idx, batch in enumerate(train_loader):
+                if max_train_batches and batch_idx >= max_train_batches:
+                    break
+                    
+                images, seg_targets, _, cls_targets = batch
+                images = images.to(device)
+                seg_targets = seg_targets.to(device)
+                cls_targets = cls_targets.to(device)
+                
+                with torch.amp.autocast(device_type=device.type, enabled=args.amp and device.type == "cuda"):
+                    seg_logits, cls_logits = model(images)
+                    loss, seg_loss, cls_loss = multitask_criterion(seg_logits, cls_logits, seg_targets, cls_targets)
+                
+                optimizer.zero_grad()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                
+                total_loss += loss.item()
+                total_seg_loss += seg_loss.item()
+                total_cls_loss += cls_loss.item()
+                
+                # 计算分类准确率
+                _, predicted = cls_logits.max(1)
+                total += cls_targets.size(0)
+                correct += predicted.eq(cls_targets).sum().item()
+                
+            loss = total_loss / len(train_loader)
+            train_losses.append(loss)
+            train_cls_acc = 100. * correct / total
+            print(f"Epoch {epoch+1}/{train_epoch} - Loss: {loss:.4f} (Seg: {total_seg_loss/len(train_loader):.4f}, Cls: {total_cls_loss/len(train_loader):.4f}), Cls Acc: {train_cls_acc:.2f}%")
+            
+        elif args.task == "binary":
             loss = train_one_epoch_binary(
                 model,
                 optimizer,
@@ -209,6 +278,7 @@ def train(args):
                 ignore_index=None,
                 max_batches=max_train_batches,
             )
+            train_losses.append(loss)
         else:
             # 兼容原多分类训练流程（CE/Focal + Dice）
             focal_loss = args.loss == "focal"
@@ -218,10 +288,73 @@ def train(args):
                 dice_loss, focal_loss, gpu_used, num_classes, scaler,
                 epoch, train_epoch
             )
+            train_losses.append(loss)
 
-        train_losses.append(loss)
-
-        if args.task == "binary":
+        # 验证
+        if args.task == "multitask":
+            # 多任务验证
+            model.eval()
+            val_loss = 0
+            val_seg_loss = 0
+            val_cls_loss = 0
+            correct = 0
+            total = 0
+            
+            # 分割指标统计
+            seg_preds_list = []
+            seg_targets_list = []
+            
+            with torch.no_grad():
+                for batch_idx, batch in enumerate(val_loader):
+                    if max_val_batches and batch_idx >= max_val_batches:
+                        break
+                        
+                    images, seg_targets, _, cls_targets = batch
+                    images = images.to(device)
+                    seg_targets = seg_targets.to(device)
+                    cls_targets = cls_targets.to(device)
+                    
+                    seg_logits, cls_logits = model(images)
+                    loss, seg_loss, cls_loss = multitask_criterion(seg_logits, cls_logits, seg_targets, cls_targets)
+                    
+                    val_loss += loss.item()
+                    val_seg_loss += seg_loss.item()
+                    val_cls_loss += cls_loss.item()
+                    
+                    # 分类准确率
+                    _, predicted = cls_logits.max(1)
+                    total += cls_targets.size(0)
+                    correct += predicted.eq(cls_targets).sum().item()
+                    
+                    # 分割预测
+                    seg_preds = (torch.sigmoid(seg_logits) > 0.5).squeeze(1).cpu().numpy()
+                    seg_preds_list.extend(seg_preds)
+                    seg_targets_list.extend(seg_targets.cpu().numpy())
+            
+            # 计算分割指标
+            seg_preds = np.array(seg_preds_list)
+            seg_targets = np.array(seg_targets_list)
+            intersection = ((seg_preds == 1) & (seg_targets == 1)).sum()
+            union = ((seg_preds == 1) | (seg_targets == 1)).sum()
+            iou = intersection / (union + 1e-6)
+            dice = 2 * intersection / (seg_preds.sum() + seg_targets.sum() + 1e-6)
+            
+            cls_acc = 100. * correct / total
+            
+            metrics = {
+                "Loss": val_loss / len(val_loader),
+                "Seg Loss": val_seg_loss / len(val_loader),
+                "Cls Loss": val_cls_loss / len(val_loader),
+                "IoU": iou,
+                "Dice": dice,
+                "Cls Acc": cls_acc,
+            }
+            current_score = iou
+            val_losses.append(metrics["Loss"])
+            val_metrics_history.append(metrics)
+            print(f"Val - IoU: {iou:.4f}, Dice: {dice:.4f}, Cls Acc: {cls_acc:.2f}%")
+            
+        elif args.task == "binary":
             metrics = evaluate_binary(
                 model,
                 val_loader,
@@ -232,12 +365,13 @@ def train(args):
                 max_batches=max_val_batches,
             )
             current_score = float(metrics["IoU"])
+            val_losses.append(metrics["Loss"])
+            val_metrics_history.append(metrics)
         else:
             metrics = evaluate(model, val_loader, device, dice_loss, focal_loss, num_classes)
             current_score = float(metrics["Mean IoU"])
-
-        val_losses.append(metrics["Loss"])
-        val_metrics_history.append(metrics)
+            val_losses.append(metrics["Loss"])
+            val_metrics_history.append(metrics)
 
         if current_score > best_score:
             best_score = current_score
@@ -264,8 +398,9 @@ def train(args):
             augmentation=False,
             split="test",
             config=args.data_config,
-            task=args.task,
+            task="binary" if args.task == "multitask" else args.task,
             cache_dir=args.cache_dir,
+            return_cls_label=(args.task == "multitask"),
         )
         test_loader = DataLoader(
             test_dataset,
@@ -278,7 +413,52 @@ def train(args):
             sampler=None,
         )
         model.load_state_dict(torch.load(best_model_path, map_location=device))
-        if args.task == "binary":
+        
+        if args.task == "multitask":
+            # 多任务测试
+            model.eval()
+            test_loss = 0
+            correct = 0
+            total = 0
+            seg_preds_list = []
+            seg_targets_list = []
+            
+            with torch.no_grad():
+                for batch_idx, batch in enumerate(test_loader):
+                    if max_test_batches and batch_idx >= max_test_batches:
+                        break
+                    images, seg_targets, _, cls_targets = batch
+                    images = images.to(device)
+                    seg_targets = seg_targets.to(device)
+                    cls_targets = cls_targets.to(device)
+                    
+                    seg_logits, cls_logits = model(images)
+                    loss, seg_loss, cls_loss = multitask_criterion(seg_logits, cls_logits, seg_targets, cls_targets)
+                    
+                    test_loss += loss.item()
+                    _, predicted = cls_logits.max(1)
+                    total += cls_targets.size(0)
+                    correct += predicted.eq(cls_targets).sum().item()
+                    
+                    seg_preds = (torch.sigmoid(seg_logits) > 0.5).squeeze(1).cpu().numpy()
+                    seg_preds_list.extend(seg_preds)
+                    seg_targets_list.extend(seg_targets.cpu().numpy())
+            
+            seg_preds = np.array(seg_preds_list)
+            seg_targets = np.array(seg_targets_list)
+            intersection = ((seg_preds == 1) & (seg_targets == 1)).sum()
+            union = ((seg_preds == 1) | (seg_targets == 1)).sum()
+            iou = intersection / (union + 1e-6)
+            dice = 2 * intersection / (seg_preds.sum() + seg_targets.sum() + 1e-6)
+            cls_acc = 100. * correct / total
+            
+            test_metrics = {
+                "Loss": test_loss / len(test_loader),
+                "IoU": iou,
+                "Dice": dice,
+                "Cls Acc": cls_acc,
+            }
+        elif args.task == "binary":
             test_metrics = evaluate_binary(
                 model,
                 test_loader,
@@ -294,7 +474,7 @@ def train(args):
             json.dump(test_metrics, f, ensure_ascii=False, indent=2)
 
         # 导出固定样例的可视化结果（用于论文对比图）
-        if args.task == "binary" and args.export_vis:
+        if args.task in ["binary", "multitask"] and args.export_vis:
             export_binary_visuals(
                 model=model,
                 hf_unet_dataset=test_dataset,
@@ -350,14 +530,16 @@ def parse_args():
                         help="Path to HF dataset directory")
     parser.add_argument("--data-config", default="no-ai", choices=["full", "no-ai", "sam3"],
                         help="Dataset config to use: 'full', 'no-ai', or 'sam3'")
-    parser.add_argument("--task", default="binary", choices=["binary", "multiclass"],
-                        help="Segmentation task: 'binary' (foreground/background) or 'multiclass'")
+    parser.add_argument("--task", default="binary", choices=["binary", "multiclass", "multitask"],
+                        help="Segmentation task: 'binary' (foreground/background), 'multiclass', or 'multitask' (segmentation + classification)")
     parser.add_argument(
         "--model",
         default="unet_resnet50",
         choices=sorted(SUPPORTED_MODELS.keys()),
-        help="Model architecture",
+        help="Model architecture (use 'multitask_unet' for multitask)",
     )
+    parser.add_argument("--cls-loss-weight", default=1.0, type=float,
+                        help="For multitask only: classification loss weight")
     parser.add_argument("--loss", default="lovasz_hinge",
                         choices=["bce", "lovasz_hinge", "ce", "focal"],
                         help="Loss function. For binary: bce/lovasz_hinge. For multiclass: ce/focal (+ optional dice).")

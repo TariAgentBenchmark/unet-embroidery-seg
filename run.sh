@@ -17,9 +17,11 @@ Outputs are written to:
 Examples:
   bash run.sh --device cuda --epochs 50 --batch-size 16 --input-size 512 --data-config no-ai
   bash run.sh --data-config full
+  bash run.sh --task multitask --model multitask_unet --data-config sam3
 
 Options:
   --data-config   no-ai|full|sam3 (default: no-ai)
+  --task          binary|multiclass|multitask (default: binary)
   --device        cuda|cpu   (default: cuda)
   --epochs        int        (default: 50)
   --batch-size    int        (default: 8)
@@ -37,6 +39,7 @@ EOF
 }
 
 DATA_CONFIG="no-ai"
+TASK="binary"
 DEVICE="cuda"
 EPOCHS="50"
 BATCH_SIZE="8"
@@ -53,6 +56,7 @@ HF_LOCAL_DIR="hf_datasets/merged_dataset_v2"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --data-config) DATA_CONFIG="$2"; shift 2 ;;
+    --task) TASK="$2"; shift 2 ;;
     --device) DEVICE="$2"; shift 2 ;;
     --epochs) EPOCHS="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
@@ -72,6 +76,11 @@ done
 
 if [[ "$DATA_CONFIG" != "no-ai" && "$DATA_CONFIG" != "full" && "$DATA_CONFIG" != "sam3" ]]; then
   echo "Invalid --data-config: $DATA_CONFIG (expected: no-ai|full|sam3)"
+  exit 1
+fi
+
+if [[ "$TASK" != "binary" && "$TASK" != "multiclass" && "$TASK" != "multitask" ]]; then
+  echo "Invalid --task: $TASK (expected: binary|multiclass|multitask)"
   exit 1
 fi
 
@@ -195,10 +204,10 @@ run_train() {
   local loss="$2"
   echo ""
   echo "=============================="
-  echo "Train: model=$model loss=$loss data=$DATA_CONFIG device=$DEVICE"
+  echo "Train: task=$TASK model=$model loss=$loss data=$DATA_CONFIG device=$DEVICE"
   echo "=============================="
   "$PYTHON" train.py \
-    --task binary \
+    --task "$TASK" \
     --data-config "$DATA_CONFIG" \
     --device "$DEVICE" \
     --epochs "$EPOCHS" \
@@ -227,6 +236,7 @@ ABLATION_MODELS=("unet_plain" "attention_unet")
 
 echo "Python: $PYTHON"
 echo "Data config: $DATA_CONFIG"
+echo "Task: $TASK"
 echo "Device: $DEVICE"
 echo "Epochs: $EPOCHS  Batch: $BATCH_SIZE  Input: $INPUT_SIZE  Workers: $WORKERS  Seed: $SEED"
 echo ""

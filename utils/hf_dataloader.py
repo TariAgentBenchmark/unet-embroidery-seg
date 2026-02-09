@@ -17,6 +17,13 @@ from utils.utils import cvtColor, preprocess_input
 class HFUnetDataset(Dataset):
     """从 Hugging Face 格式数据集加载的 Unet Dataset"""
     
+    # 类别名称到索引的映射
+    CLASS_TO_IDX = {
+        "动物类": 0,
+        "植物类": 1,
+        "复合类": 2,
+    }
+    
     def __init__(
         self,
         data_dir,
@@ -27,6 +34,7 @@ class HFUnetDataset(Dataset):
         config="full",
         task: str = "multiclass",
         cache_dir: str | None = None,
+        return_cls_label: bool = False,
     ):
         """
         Args:
@@ -38,11 +46,13 @@ class HFUnetDataset(Dataset):
             config: 数据集配置 ("full" 或 "no-ai")
             task: 任务类型 ("binary" 或 "multiclass")
             cache_dir: Hugging Face datasets 缓存目录（建议放在项目内，避免无权限写入 $HOME/.cache）
+            return_cls_label: 是否返回分类标签（用于多任务学习）
         """
         self.input_shape = input_shape
         self.num_classes = num_classes
         self.augmentation = augmentation
         self.task = task
+        self.return_cls_label = return_cls_label
         
         # 加载 Hugging Face 数据集
         dataset_path = f"{data_dir}/{config}"
@@ -79,6 +89,18 @@ class HFUnetDataset(Dataset):
         # 将标签转换为one-hot编码
         seg_labels = np.eye(self.num_classes + 1)[png.reshape([-1])]
         seg_labels = seg_labels.reshape((int(self.input_shape[0]), int(self.input_shape[1]), self.num_classes + 1))
+        
+        # 如果需要返回分类标签
+        if self.return_cls_label:
+            label_name = sample.get("label", "unknown")
+            # 从 label 字段提取类别（如 "动物类100" -> "动物类"）
+            for class_name in self.CLASS_TO_IDX.keys():
+                if label_name.startswith(class_name):
+                    cls_label = self.CLASS_TO_IDX[class_name]
+                    break
+            else:
+                cls_label = 0  # 默认动物类
+            return jpg, png, seg_labels, cls_label
         
         return jpg, png, seg_labels
     
@@ -160,17 +182,32 @@ class HFUnetDataset(Dataset):
 
 def hf_unet_dataset_collate(batch):
     """DataLoader 的 collate_fn"""
+    # 判断是否是多任务模式（batch 元素长度为 4）
+    is_multitask = len(batch[0]) == 4
+    
     images = []
     pngs = []
     seg_labels = []
+    cls_labels = [] if is_multitask else None
     
-    for img, png, labels in batch:
-        images.append(img)
-        pngs.append(png)
-        seg_labels.append(labels)
+    if is_multitask:
+        for img, png, labels, cls_label in batch:
+            images.append(img)
+            pngs.append(png)
+            seg_labels.append(labels)
+            cls_labels.append(cls_label)
+    else:
+        for img, png, labels in batch:
+            images.append(img)
+            pngs.append(png)
+            seg_labels.append(labels)
     
     images = torch.from_numpy(np.array(images)).type(torch.FloatTensor)
     pngs = torch.from_numpy(np.array(pngs)).long()
     seg_labels = torch.from_numpy(np.array(seg_labels)).type(torch.FloatTensor)
+    
+    if is_multitask:
+        cls_labels = torch.from_numpy(np.array(cls_labels)).long()
+        return images, pngs, seg_labels, cls_labels
     
     return images, pngs, seg_labels

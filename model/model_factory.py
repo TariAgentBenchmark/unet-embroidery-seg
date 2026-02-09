@@ -7,6 +7,7 @@ from model.unet_resnet import Unet as UNetResNet50
 from model.unet_plain import UNetPlain
 from model.unet_attention import AttentionUNet
 from model.unet_dualdense import DualDenseUNet
+from model.unet_multitask import MultiTaskUNet
 
 
 SUPPORTED_MODELS = {
@@ -14,13 +15,27 @@ SUPPORTED_MODELS = {
     "unet_resnet50": UNetResNet50,
     "attention_unet": AttentionUNet,
     "dualdense_unet": DualDenseUNet,
+    "multitask_unet": MultiTaskUNet,
 }
 
 
-def build_model(model_name: str, num_classes: int):
+def build_model(model_name: str, num_classes: int, num_seg_classes: int = 1, num_cls_classes: int = 3):
+    """
+    构建模型
+    
+    Args:
+        model_name: 模型名称
+        num_classes: 分割类别数 (用于普通模型)
+        num_seg_classes: 多任务模型的分割类别数
+        num_cls_classes: 多任务模型的分类类别数
+    """
     if model_name not in SUPPORTED_MODELS:
         raise ValueError(f"Unsupported model: {model_name}. Supported: {sorted(SUPPORTED_MODELS.keys())}")
-    return SUPPORTED_MODELS[model_name](num_classes=num_classes)
+    
+    if model_name == "multitask_unet":
+        return SUPPORTED_MODELS[model_name](num_seg_classes=num_seg_classes, num_cls_classes=num_cls_classes)
+    else:
+        return SUPPORTED_MODELS[model_name](num_classes=num_classes)
 
 
 def load_weights_flexible(model, weights_path: str):
