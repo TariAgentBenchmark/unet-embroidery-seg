@@ -19,7 +19,7 @@ Examples:
   bash run.sh --data-config full
 
 Options:
-  --data-config   no-ai|full (default: no-ai)
+  --data-config   no-ai|full|sam3 (default: no-ai)
   --device        cuda|cpu   (default: cuda)
   --epochs        int        (default: 50)
   --batch-size    int        (default: 8)
@@ -70,8 +70,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$DATA_CONFIG" != "no-ai" && "$DATA_CONFIG" != "full" ]]; then
-  echo "Invalid --data-config: $DATA_CONFIG (expected: no-ai|full)"
+if [[ "$DATA_CONFIG" != "no-ai" && "$DATA_CONFIG" != "full" && "$DATA_CONFIG" != "sam3" ]]; then
+  echo "Invalid --data-config: $DATA_CONFIG (expected: no-ai|full|sam3)"
   exit 1
 fi
 

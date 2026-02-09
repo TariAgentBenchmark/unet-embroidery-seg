@@ -26,6 +26,7 @@ from huggingface_hub import login, HfApi, create_repo
 # ============ 配置 ============
 VOC_ORIGINAL = Path("./raw_datasets/VOCdevkit/VOC2012")
 VOC_NO_AI = Path("./raw_datasets/VOCdevkit_no_ai/VOC2012")
+VOC_SAM3 = Path("./raw_datasets/VOCdevkit_SAM3/VOC2012")  # SAM3 标注的 mask
 OUTPUT_DIR = Path("./hf_datasets")
 REPO_ID = "tari-tech/13803867589-unet-image-seg"
 
@@ -134,6 +135,51 @@ def convert_voc_to_hf(voc_root: Path, subset_name: str) -> DatasetDict:
     return dataset_dict
 
 
+def convert_sam3_to_hf(sam3_root: Path, no_ai_root: Path, subset_name: str) -> DatasetDict:
+    """将 SAM3 标注的数据集转换为 Hugging Face 格式
+    
+    SAM3 数据集特点：
+    - mask 保存在 sam3_root/JPEGImages/
+    - 原图使用 no_ai_root/JPEGImages/ 中对应的图片
+    - 分割信息使用 no_ai_root 的 ImageSets，但只保留有 SAM3 mask 的图片
+    """
+    print(f"\n转换 {subset_name} 数据集...")
+    
+    sam3_mask_dir = sam3_root / 'JPEGImages'
+    jpeg_dir = no_ai_root / 'JPEGImages'
+    split_dir = no_ai_root / 'ImageSets' / 'Segmentation'
+    
+    # 获取所有 SAM3 标注的 mask 文件名（不含扩展名）
+    sam3_image_ids = set()
+    for mask_file in sam3_mask_dir.glob('*.png'):
+        sam3_image_ids.add(mask_file.stem)
+    
+    print(f"  找到 {len(sam3_image_ids)} 个 SAM3 标注的 mask")
+    
+    dataset_dict = DatasetDict()
+    
+    splits = {
+        'train': split_dir / 'train.txt',
+        'validation': split_dir / 'val.txt',
+        'test': split_dir / 'test.txt',
+    }
+    
+    for split_name, split_file in splits.items():
+        if split_file.exists():
+            split_ids = load_split_ids(split_file)
+            # 只保留有 SAM3 mask 的图片
+            filtered_ids = [id for id in split_ids if id in sam3_image_ids]
+            skipped = len(split_ids) - len(filtered_ids)
+            
+            dataset = create_dataset_split(
+                split_name, filtered_ids, jpeg_dir, sam3_mask_dir, subset_name
+            )
+            dataset_dict[split_name] = dataset
+            print(f"    {split_name}: {len(dataset)} 个样本 (跳过 {skipped} 个无 SAM3 标注)")
+    
+    return dataset_dict
+
+
 # ============ 创建多 Config 结构 ============
 
 def create_merged_dataset():
@@ -171,6 +217,17 @@ def create_merged_dataset():
         noai_ds[split].to_parquet(str(split_dir / "data.parquet"))
     print(f"   已保存到: {noai_dir}")
     
+    # 转换 sam3
+    print("\n3. 转换 sam3 数据集...")
+    sam3_ds = convert_sam3_to_hf(VOC_SAM3, VOC_NO_AI, "sam3")
+    sam3_dir = merged_dir / "sam3"
+    sam3_dir.mkdir(exist_ok=True)
+    for split in sam3_ds.keys():
+        split_dir = sam3_dir / split
+        split_dir.mkdir(exist_ok=True)
+        sam3_ds[split].to_parquet(str(split_dir / "data.parquet"))
+    print(f"   已保存到: {sam3_dir}")
+    
     # 创建 README
     readme_content = '''---
 tags:
@@ -195,6 +252,9 @@ ds = load_dataset("tari-tech/13803867589-unet-image-seg", data_dir="full")
 
 # 加载去除AI图的数据集 (763张)
 ds = load_dataset("tari-tech/13803867589-unet-image-seg", data_dir="no-ai")
+
+# 加载 SAM3 重新标注的数据集 (563张)
+ds = load_dataset("tari-tech/13803867589-unet-image-seg", data_dir="sam3")
 ```
 
 ## 数据集统计
@@ -203,6 +263,13 @@ ds = load_dataset("tari-tech/13803867589-unet-image-seg", data_dir="no-ai")
 |--------|-------|-----|------|-------|
 | full   | 584   | 167 | 84   | 835   |
 | no-ai  | 534   | 152 | 77   | 763   |
+| sam3   | ~394  | ~113| ~56  | 563   |
+
+## 子集说明
+
+- **full**: 完整数据集，包含所有图片
+- **no-ai**: 去除 AI 生成的图片，只保留真实刺绣图案
+- **sam3**: 使用 SAM3 模型重新标注的 mask，基于 no-ai 的子集（部分图片被标注）
 '''
     
     with open(merged_dir / "README.md", 'w', encoding='utf-8') as f:
@@ -258,7 +325,7 @@ def upload_to_hub():
     
     # 上传数据
     print("\n4. 上传数据...")
-    for config in ["full", "no-ai"]:
+    for config in ["full", "no-ai", "sam3"]:
         print(f"   上传 {config} config...")
         api.upload_folder(
             folder_path=str(merged_dir / config),

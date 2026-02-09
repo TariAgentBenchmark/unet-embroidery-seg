@@ -348,8 +348,8 @@ def parse_args():
                         help="Path to the pretrained model weights")
     parser.add_argument("--data-path", default="./hf_datasets/merged_dataset_v2", 
                         help="Path to HF dataset directory")
-    parser.add_argument("--data-config", default="no-ai", choices=["full", "no-ai"],
-                        help="Dataset config to use: 'full' or 'no-ai'")
+    parser.add_argument("--data-config", default="no-ai", choices=["full", "no-ai", "sam3"],
+                        help="Dataset config to use: 'full', 'no-ai', or 'sam3'")
     parser.add_argument("--task", default="binary", choices=["binary", "multiclass"],
                         help="Segmentation task: 'binary' (foreground/background) or 'multiclass'")
     parser.add_argument(
