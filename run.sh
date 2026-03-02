@@ -74,8 +74,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$DATA_CONFIG" != "no-ai" && "$DATA_CONFIG" != "full" && "$DATA_CONFIG" != "sam3" ]]; then
-  echo "Invalid --data-config: $DATA_CONFIG (expected: no-ai|full|sam3)"
+if [[ "$DATA_CONFIG" != "no-ai" && "$DATA_CONFIG" != "full" && "$DATA_CONFIG" != "sam3" && "$DATA_CONFIG" != "sam3-label" ]]; then
+  echo "Invalid --data-config: $DATA_CONFIG (expected: no-ai|full|sam3|sam3-label)"
   exit 1
 fi
 
