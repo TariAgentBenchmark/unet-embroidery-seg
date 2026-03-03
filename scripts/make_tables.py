@@ -66,7 +66,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate paper-style tables from run/train experiments.")
     parser.add_argument("--runs-dir", default="run/train", help="Directory that contains exp*/ folders")
     parser.add_argument("--output-dir", default="run/tables", help="Where to write CSV tables")
-    parser.add_argument("--data-config", default="no-ai", choices=["no-ai", "full"], help="Filter by dataset config")
+    parser.add_argument("--data-config", default="no-ai", choices=["no-ai", "full", "sam3-label"], help="Filter by dataset config")
     parser.add_argument("--task", default="binary", choices=["binary", "multiclass"], help="Filter by task")
     parser.add_argument("--loss-compare-model", default="unet_resnet50", help="Model used for loss comparison table")
     parser.add_argument("--losses", default="bce,lovasz_hinge", help="Comma-separated loss names for Table 3-1")
