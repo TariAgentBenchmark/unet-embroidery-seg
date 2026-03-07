@@ -45,12 +45,27 @@ def get_gpu_usage():
         return 0
 
 
-def create_model(model_name, num_classes, weights, num_seg_classes=1, num_cls_classes=3):
+def create_model(
+    model_name,
+    num_classes,
+    weights,
+    num_seg_classes=1,
+    num_cls_classes=3,
+    use_aspp=False,
+    use_eca=False,
+    use_sa=False,
+):
     """创建模型"""
     if model_name == "multitask_unet":
         model = build_model(model_name, num_classes=num_classes, num_seg_classes=num_seg_classes, num_cls_classes=num_cls_classes)
     else:
-        model = build_model(model_name, num_classes=num_classes)
+        model = build_model(
+            model_name,
+            num_classes=num_classes,
+            use_aspp=use_aspp,
+            use_eca=use_eca,
+            use_sa=use_sa,
+        )
     weights_init(model)
 
     if weights:
@@ -163,9 +178,25 @@ def train(args):
 
     # 创建模型
     if args.task == "multitask":
-        model = create_model(args.model, num_classes=1, weights=args.weights, num_seg_classes=1, num_cls_classes=3)
+        model = create_model(
+            args.model,
+            num_classes=1,
+            weights=args.weights,
+            num_seg_classes=1,
+            num_cls_classes=3,
+            use_aspp=args.use_aspp,
+            use_eca=args.use_eca,
+            use_sa=args.use_sa,
+        )
     else:
-        model = create_model(args.model, num_classes=num_classes, weights=args.weights)
+        model = create_model(
+            args.model,
+            num_classes=num_classes,
+            weights=args.weights,
+            use_aspp=args.use_aspp,
+            use_eca=args.use_eca,
+            use_sa=args.use_sa,
+        )
     
     scaler = torch.amp.GradScaler(device.type, enabled=args.amp and device.type == "cuda")
 
@@ -537,6 +568,24 @@ def parse_args():
         default="unet_resnet50",
         choices=sorted(SUPPORTED_MODELS.keys()),
         help="Model architecture (use 'multitask_unet' for multitask)",
+    )
+    parser.add_argument(
+        "--use-aspp",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable ASPP bottleneck module for unet_plain ablation runs",
+    )
+    parser.add_argument(
+        "--use-eca",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable ECA channel attention for unet_plain ablation runs",
+    )
+    parser.add_argument(
+        "--use-sa",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable spatial attention on skip features for unet_plain ablation runs",
     )
     parser.add_argument("--cls-loss-weight", default=1.0, type=float,
                         help="For multitask only: classification loss weight")

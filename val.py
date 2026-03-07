@@ -62,7 +62,13 @@ def val(args):
     if args.task == "multitask":
         model = build_model(args.model, num_classes=1, num_seg_classes=1, num_cls_classes=3)
     else:
-        model = build_model(args.model, num_classes=num_classes)
+        model = build_model(
+            args.model,
+            num_classes=num_classes,
+            use_aspp=args.use_aspp,
+            use_eca=args.use_eca,
+            use_sa=args.use_sa,
+        )
     
     # 加载权重
     weights_dict = torch.load(args.weights, map_location=device)
@@ -172,6 +178,24 @@ def parse_args():
         default="unet_resnet50",
         choices=sorted(SUPPORTED_MODELS.keys()),
         help="Model architecture (use 'multitask_unet' for multitask)",
+    )
+    parser.add_argument(
+        "--use-aspp",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable ASPP bottleneck module for unet_plain ablation runs",
+    )
+    parser.add_argument(
+        "--use-eca",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable ECA channel attention for unet_plain ablation runs",
+    )
+    parser.add_argument(
+        "--use-sa",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable spatial attention on skip features for unet_plain ablation runs",
     )
     parser.add_argument("--loss", default="lovasz_hinge", choices=["bce", "lovasz_hinge", "ce", "focal"],
                         help="Loss name (only used to report Loss for binary)")

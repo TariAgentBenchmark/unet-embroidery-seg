@@ -19,7 +19,15 @@ SUPPORTED_MODELS = {
 }
 
 
-def build_model(model_name: str, num_classes: int, num_seg_classes: int = 1, num_cls_classes: int = 3):
+def build_model(
+    model_name: str,
+    num_classes: int,
+    num_seg_classes: int = 1,
+    num_cls_classes: int = 3,
+    use_aspp: bool = False,
+    use_eca: bool = False,
+    use_sa: bool = False,
+):
     """
     构建模型
     
@@ -34,6 +42,13 @@ def build_model(model_name: str, num_classes: int, num_seg_classes: int = 1, num
     
     if model_name == "multitask_unet":
         return SUPPORTED_MODELS[model_name](num_seg_classes=num_seg_classes, num_cls_classes=num_cls_classes)
+    if model_name == "unet_plain":
+        return SUPPORTED_MODELS[model_name](
+            num_classes=num_classes,
+            use_aspp=use_aspp,
+            use_eca=use_eca,
+            use_sa=use_sa,
+        )
     else:
         return SUPPORTED_MODELS[model_name](num_classes=num_classes)
 
@@ -62,4 +77,3 @@ def load_weights_flexible(model, weights_path: str):
     model.load_state_dict(model_dict)
     print(f"Loaded weights: {len(load_key)} keys, Skipped: {len(no_load_key)} keys")
     return model
-

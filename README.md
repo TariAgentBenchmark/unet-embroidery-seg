@@ -128,6 +128,24 @@ python scripts/make_tables.py --data-config no-ai
 - `table_3_2_model_compare.csv`
 - `table_4_2_ablation.csv`
 
+### 跑表 4-2 的 8 组模块消融
+
+如果要按 `ASPP / ECA / SA` 的 8 组组合跑单独的消融表，使用：
+
+```bash
+bash scripts/run_table_4_2_ablation.sh --data-config no-ai --device cuda --epochs 50 --batch-size 8
+```
+
+该脚本会固定使用 `unet_plain` 作为基线模型，并输出：
+- `run/train/exp*/`
+- `run/tables/table_4_2_ablation.csv`
+
+如果只想根据已有实验重建表格，可单独执行：
+
+```bash
+python scripts/make_ablation_table_4_2.py --data-config no-ai --task binary --loss lovasz_hinge
+```
+
 ## 上传到 Hugging Face
 
 如需重新转换上传数据集：
