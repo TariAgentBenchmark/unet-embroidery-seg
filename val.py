@@ -167,8 +167,8 @@ def parse_args():
 
     parser.add_argument("--data-path", default="./hf_datasets/merged_dataset_v2",
                         help="Path to HF dataset directory")
-    parser.add_argument("--data-config", default="no-ai", choices=["full", "no-ai", "sam3"],
-                        help="Dataset config to use: 'full', 'no-ai', or 'sam3'")
+    parser.add_argument("--data-config", default="sam3-label", choices=["full", "no-ai", "sam3", "sam3-label"],
+                        help="Dataset config to use: 'full', 'no-ai', 'sam3', or 'sam3-label'")
     parser.add_argument("--weights", default="weights/unet_resnet_voc.pth",
                         help="Path to model weights")
     parser.add_argument("--task", default="binary", choices=["binary", "multiclass", "multitask"],

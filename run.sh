@@ -15,12 +15,12 @@ Outputs are written to:
   - run/tables/     (table_3_1_loss_compare.csv, table_3_2_model_compare.csv, table_4_2_ablation.csv)
 
 Examples:
-  bash run.sh --device cuda --epochs 50 --batch-size 16 --input-size 512 --data-config no-ai
+  bash run.sh --device cuda --epochs 50 --batch-size 16 --input-size 512 --data-config sam3-label
   bash run.sh --data-config full
   bash run.sh --task multitask --model multitask_unet --data-config sam3
 
 Options:
-  --data-config   no-ai|full|sam3 (default: no-ai)
+  --data-config   no-ai|full|sam3|sam3-label (default: sam3-label)
   --task          binary|multiclass|multitask (default: binary)
   --device        cuda|cpu   (default: cuda)
   --epochs        int        (default: 50)
@@ -38,7 +38,7 @@ Options:
 EOF
 }
 
-DATA_CONFIG="no-ai"
+DATA_CONFIG="sam3-label"
 TASK="binary"
 DEVICE="cuda"
 EPOCHS="50"

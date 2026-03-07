@@ -45,7 +45,7 @@ uv sync
 #### 二分类（loss 对比 + 4 模型对比 + 消融 + 表格）
 
 ```bash
-bash run.sh --task binary --device cuda --data-config no-ai --epochs 50 --batch-size 16 --input-size 512
+bash run.sh --task binary --device cuda --data-config sam3-label --epochs 50 --batch-size 16 --input-size 512
 ```
 
 #### 多任务训练
@@ -61,8 +61,8 @@ bash run.sh --task multitask --model multitask_unet --data-config sam3 --epochs 
 #### 二分类分割（前景 vs 背景）
 
 ```bash
-# 默认 no-ai 数据集
-python train.py --task binary --data-config no-ai --model unet_resnet50 --loss lovasz_hinge --epochs 50 --batch-size 8
+# 默认 sam3-label 数据集
+python train.py --task binary --data-config sam3-label --model unet_resnet50 --loss lovasz_hinge --epochs 50 --batch-size 8
 
 # 使用 full 数据集
 python train.py --data-config full --epochs 50 --batch-size 8
@@ -99,7 +99,7 @@ python train.py \
 
 ```bash
 # 二分类验证
-python val.py --task binary --data-config no-ai --model unet_resnet50 --weights run/train/exp1/weights/best.pth
+python val.py --task binary --data-config sam3-label --model unet_resnet50 --weights run/train/exp1/weights/best.pth
 
 # 多任务验证
 python val.py \
@@ -120,7 +120,7 @@ python predict.py --model unet_resnet50 --weights run/train/exp1/weights/best.pt
 训练完成后，运行：
 
 ```bash
-python scripts/make_tables.py --data-config no-ai
+python scripts/make_tables.py --data-config sam3-label
 ```
 
 输出在 `run/tables/`：
@@ -133,7 +133,7 @@ python scripts/make_tables.py --data-config no-ai
 如果要按 `ASPP / ECA / SA` 的 8 组组合跑单独的消融表，使用：
 
 ```bash
-bash scripts/run_table_4_2_ablation.sh --data-config no-ai --device cuda --epochs 50 --batch-size 8
+bash scripts/run_table_4_2_ablation.sh --data-config sam3-label --device cuda --epochs 50 --batch-size 8
 ```
 
 该脚本会固定使用 `unet_plain` 作为基线模型，并输出：
@@ -143,7 +143,7 @@ bash scripts/run_table_4_2_ablation.sh --data-config no-ai --device cuda --epoch
 如果只想根据已有实验重建表格，可单独执行：
 
 ```bash
-python scripts/make_ablation_table_4_2.py --data-config no-ai --task binary --loss lovasz_hinge
+python scripts/make_ablation_table_4_2.py --data-config sam3-label --task binary --loss lovasz_hinge
 ```
 
 ## 上传到 Hugging Face

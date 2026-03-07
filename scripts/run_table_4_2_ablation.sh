@@ -18,10 +18,10 @@ Outputs:
   - run/tables/table_4_2_ablation.csv
 
 Example:
-  bash scripts/run_table_4_2_ablation.sh --data-config no-ai --device cuda --epochs 50 --batch-size 8
+  bash scripts/run_table_4_2_ablation.sh --data-config sam3-label --device cuda --epochs 50 --batch-size 8
 
 Options:
-  --data-config   no-ai|full|sam3|sam3-label (default: no-ai)
+  --data-config   no-ai|full|sam3|sam3-label (default: sam3-label)
   --task          binary (default: binary)
   --device        cuda|cpu (default: cuda)
   --epochs        int (default: 50)
@@ -44,7 +44,7 @@ Options:
 EOF
 }
 
-DATA_CONFIG="no-ai"
+DATA_CONFIG="sam3-label"
 TASK="binary"
 DEVICE="cuda"
 EPOCHS="50"

@@ -97,7 +97,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate Table 4-2 module ablation CSV from run/train experiments.")
     parser.add_argument("--runs-dir", default="run/train", help="Directory containing exp*/ folders")
     parser.add_argument("--output", default="run/tables/table_4_2_ablation.csv", help="Output CSV path")
-    parser.add_argument("--data-config", default="no-ai", choices=["no-ai", "full", "sam3", "sam3-label"])
+    parser.add_argument("--data-config", default="sam3-label", choices=["no-ai", "full", "sam3", "sam3-label"])
     parser.add_argument("--task", default="binary", choices=["binary"])
     parser.add_argument("--model", default="unet_plain", help="Model used for module ablation")
     parser.add_argument("--loss", default="lovasz_hinge", help="Loss used for module ablation")
