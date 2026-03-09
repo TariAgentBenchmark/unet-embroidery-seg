@@ -48,6 +48,8 @@ uv sync
 bash run.sh --task binary --device cuda --data-config sam3-label --epochs 50 --batch-size 16 --input-size 512
 ```
 
+`run.sh` 在主实验里会给 `unet_plain`、`unet_resnet50`、`attention_unet`、`dualdense_unet` 默认加上 `--use-sa`。如果你想关闭这个默认行为，可以追加 `--no-default-sa`。原来的 loss × attention 消融步骤会显式关闭这个默认 `SA`，避免和旧表格定义冲突。
+
 #### 多任务训练
 
 ```bash

@@ -585,7 +585,7 @@ def parse_args():
         "--use-sa",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Enable spatial attention on skip features for unet_plain ablation runs",
+        help="Enable spatial attention on skip features for supported U-Net variants",
     )
     parser.add_argument("--cls-loss-weight", default=1.0, type=float,
                         help="For multitask only: classification loss weight")

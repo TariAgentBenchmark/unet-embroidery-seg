@@ -49,6 +49,8 @@ def build_model(
             use_eca=use_eca,
             use_sa=use_sa,
         )
+    if model_name in {"unet_resnet50", "attention_unet", "dualdense_unet"}:
+        return SUPPORTED_MODELS[model_name](num_classes=num_classes, use_sa=use_sa)
     else:
         return SUPPORTED_MODELS[model_name](num_classes=num_classes)
 

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from model.unet_plain import SpatialAttention
+
 
 class _DenseLayer(nn.Module):
     def __init__(self, in_channels: int, growth_rate: int):
@@ -48,16 +50,17 @@ class DenseConvBlock(nn.Module):
 
 
 class UpDense(nn.Module):
-    def __init__(self, in_channels: int, skip_channels: int, out_channels: int, growth_rate: int = 32, num_layers: int = 3):
+    def __init__(self, in_channels: int, skip_channels: int, out_channels: int, growth_rate: int = 32, num_layers: int = 3, use_sa: bool = False):
         super().__init__()
         self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        self.sa = SpatialAttention() if use_sa else nn.Identity()
         self.conv = DenseConvBlock(in_channels + skip_channels, out_channels, growth_rate=growth_rate, num_layers=num_layers)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = self.up(x)
         if x.size(-1) != skip.size(-1) or x.size(-2) != skip.size(-2):
             x = nn.functional.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
-        x = torch.cat([skip, x], dim=1)
+        x = torch.cat([self.sa(skip), x], dim=1)
         return self.conv(x)
 
 
@@ -73,6 +76,7 @@ class DualDenseUNet(nn.Module):
         base_channels: int = 64,
         growth_rate: int = 32,
         num_layers: int = 3,
+        use_sa: bool = False,
     ):
         super().__init__()
 
@@ -82,10 +86,10 @@ class DualDenseUNet(nn.Module):
         self.down3 = nn.Sequential(nn.MaxPool2d(2), DenseConvBlock(base_channels * 4, base_channels * 8, growth_rate, num_layers))
         self.down4 = nn.Sequential(nn.MaxPool2d(2), DenseConvBlock(base_channels * 8, base_channels * 16, growth_rate, num_layers))
 
-        self.up1 = UpDense(base_channels * 16, base_channels * 8, base_channels * 8, growth_rate, num_layers)
-        self.up2 = UpDense(base_channels * 8, base_channels * 4, base_channels * 4, growth_rate, num_layers)
-        self.up3 = UpDense(base_channels * 4, base_channels * 2, base_channels * 2, growth_rate, num_layers)
-        self.up4 = UpDense(base_channels * 2, base_channels, base_channels, growth_rate, num_layers)
+        self.up1 = UpDense(base_channels * 16, base_channels * 8, base_channels * 8, growth_rate, num_layers, use_sa=use_sa)
+        self.up2 = UpDense(base_channels * 8, base_channels * 4, base_channels * 4, growth_rate, num_layers, use_sa=use_sa)
+        self.up3 = UpDense(base_channels * 4, base_channels * 2, base_channels * 2, growth_rate, num_layers, use_sa=use_sa)
+        self.up4 = UpDense(base_channels * 2, base_channels, base_channels, growth_rate, num_layers, use_sa=use_sa)
 
         self.outc = nn.Conv2d(base_channels, num_classes, kernel_size=1)
 
@@ -101,4 +105,3 @@ class DualDenseUNet(nn.Module):
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         return self.outc(x)
-

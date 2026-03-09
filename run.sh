@@ -7,7 +7,9 @@ Run the full binary-segmentation pipeline:
   1) Loss compare (BCE vs Lovasz-hinge) on unet_resnet50
   2) Pick best loss by val IoU
   3) Model compare (4 U-Net variants) with best loss
+     Note: run.sh enables SA by default for the 4 compared segmentation models
   4) Ablation (loss x attention on/off)
+     Note: this ablation keeps SA disabled to preserve the original comparison
   5) Generate paper-style CSV tables
 
 Outputs are written to:
@@ -34,6 +36,7 @@ Options:
   --hf-repo       repo_id    (default: tari-tech/13803867589-unet-image-seg)
   --hf-revision   revision   (default: empty)
   --hf-local-dir  path       (default: hf_datasets/merged_dataset_v2)
+  --no-default-sa disable SA when run.sh trains supported segmentation models
   -h, --help
 EOF
 }
@@ -52,6 +55,7 @@ CACHE_DIR=".hf-cache/datasets"
 HF_REPO="tari-tech/13803867589-unet-image-seg"
 HF_REVISION=""
 HF_LOCAL_DIR="hf_datasets/merged_dataset_v2"
+DEFAULT_MODEL_SA="true"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -69,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --hf-repo) HF_REPO="$2"; shift 2 ;;
     --hf-revision) HF_REVISION="$2"; shift 2 ;;
     --hf-local-dir) HF_LOCAL_DIR="$2"; shift 2 ;;
+    --no-default-sa) DEFAULT_MODEL_SA="false"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1"; usage; exit 1 ;;
   esac
@@ -199,12 +204,25 @@ print(float(data.get("best_score", -1.0)))
 PY
 }
 
+supports_default_sa() {
+  local model="$1"
+  [[ "$model" == "unet_plain" || "$model" == "unet_resnet50" || "$model" == "attention_unet" || "$model" == "dualdense_unet" ]]
+}
+
 run_train() {
   local model="$1"
   local loss="$2"
+  local apply_default_sa="${3:-true}"
+  local extra_args=()
+  if [[ "$apply_default_sa" == "true" && "$DEFAULT_MODEL_SA" == "true" ]] && supports_default_sa "$model"; then
+    extra_args+=(--use-sa)
+  fi
   echo ""
   echo "=============================="
   echo "Train: task=$TASK model=$model loss=$loss data=$DATA_CONFIG device=$DEVICE"
+  if [[ ${#extra_args[@]} -gt 0 ]]; then
+    echo "Extra args: ${extra_args[*]}"
+  fi
   echo "=============================="
   "$PYTHON" train.py \
     --task "$TASK" \
@@ -218,7 +236,8 @@ run_train() {
     --model "$model" \
     --loss "$loss" \
     --weights "$WEIGHTS" \
-    --cache-dir "$CACHE_DIR"
+    --cache-dir "$CACHE_DIR" \
+    "${extra_args[@]}"
 
   LAST_EXP_DIR="$(latest_exp_dir)"
   if [[ -z "${LAST_EXP_DIR:-}" ]]; then
@@ -239,6 +258,7 @@ echo "Data config: $DATA_CONFIG"
 echo "Task: $TASK"
 echo "Device: $DEVICE"
 echo "Epochs: $EPOCHS  Batch: $BATCH_SIZE  Input: $INPUT_SIZE  Workers: $WORKERS  Seed: $SEED"
+echo "Default SA for supported models: $DEFAULT_MODEL_SA"
 echo ""
 
 ensure_dataset "$DATA_CONFIG"
@@ -275,7 +295,7 @@ done
 # 3) ablation: (loss x attention on/off)
 for loss in "$LOSS_A" "$LOSS_B"; do
   for model in "${ABLATION_MODELS[@]}"; do
-    run_train "$model" "$loss"
+    run_train "$model" "$loss" "false"
   done
 done
 

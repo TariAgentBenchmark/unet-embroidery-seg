@@ -2,10 +2,11 @@ import torch
 import torch.nn as nn
 
 from model.resnet_backbone import resnet50
+from model.unet_plain import SpatialAttention
 
 # 定义一个 U-Net 解码模块（上采样模块）
 class unetUp(nn.Module):
-    def __init__(self, in_size, out_size):
+    def __init__(self, in_size, out_size, use_sa=False):
         """
                构造函数
                参数：
@@ -21,6 +22,7 @@ class unetUp(nn.Module):
         self.up = nn.UpsamplingBilinear2d(scale_factor=2)
         # ReLU 激活函数，inplace=True 表示原地操作，节省内存
         self.relu = nn.ReLU(inplace=True)
+        self.sa = SpatialAttention() if use_sa else nn.Identity()
 
     def forward(self, inputs1, inputs2):
         """
@@ -31,7 +33,7 @@ class unetUp(nn.Module):
         """
         # 先对 inputs2 进行上采样，然后与 inputs1 在通道维度上进行拼接
         # 拼接后的通道数为 in_size
-        outputs = torch.cat([inputs1, self.up(inputs2)], 1)
+        outputs = torch.cat([self.sa(inputs1), self.up(inputs2)], 1)
         # 第一次卷积 + ReLU
         outputs = self.conv1(outputs)
         outputs = self.relu(outputs)
@@ -44,7 +46,7 @@ class unetUp(nn.Module):
 
 # 定义 U-Net 主体结构
 class Unet(nn.Module):
-    def __init__(self, num_classes=21):
+    def __init__(self, num_classes=21, use_sa: bool = False):
         """
                 构造函数
                 参数：
@@ -61,10 +63,10 @@ class Unet(nn.Module):
 
         # 定义 4 层上采样模块（从深到浅）
         # 每层通过双线性插值上采样 + 拼接 + 两次卷积 + ReLU
-        self.up_concat4 = unetUp(in_filters[3], out_filters[3])  # 最深层输出
-        self.up_concat3 = unetUp(in_filters[2], out_filters[2])  # 次深层
-        self.up_concat2 = unetUp(in_filters[1], out_filters[1])  # 中间层
-        self.up_concat1 = unetUp(in_filters[0], out_filters[0])  # 最浅层
+        self.up_concat4 = unetUp(in_filters[3], out_filters[3], use_sa=use_sa)  # 最深层输出
+        self.up_concat3 = unetUp(in_filters[2], out_filters[2], use_sa=use_sa)  # 次深层
+        self.up_concat2 = unetUp(in_filters[1], out_filters[1], use_sa=use_sa)  # 中间层
+        self.up_concat1 = unetUp(in_filters[0], out_filters[0], use_sa=use_sa)  # 最浅层
 
         # 对最后一层解码器的输出再上采样一倍并做两次卷积处理，进一步提升分辨率
         self.up_conv = nn.Sequential(
